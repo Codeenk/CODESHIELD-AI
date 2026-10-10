@@ -1,0 +1,40 @@
+# Local development stack mirroring the PRD §10 suggested architecture.
+#
+#   docker compose up --build
+#
+# Redis + Postgres are declared so the in-memory store can be swapped for the async queue and
+# metadata store described in the PRD; the API runs with the in-memory store by default.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      CODESHIELD_HOST: 0.0.0.0
+      CODESHIELD_PORT: "8000"
+      CODESHIELD_DISABLE_MODEL: "0"
+      CODESHIELD_RETAIN_CODE: "0"
+    depends_on:
+      - redis
+      - postgres
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: codeshield
+      POSTGRES_PASSWORD: codeshield
+      POSTGRES_DB: codeshield
+    ports:
+      - "5432:5432"
+    volumes:
+      - codeshield_pg:/var/lib/postgresql/data
+
+volumes:
+  codeshield_pg:

@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check codeshield tests
+
+      - name: Test
+        run: pytest -q
+
+      - name: Smoke scan (rules only)
+        run: |
+          set -o pipefail
+          python -m codeshield scan examples/vulnerable --no-model --format json -o smoke.json
+          python - <<'PY'
+          import json, sys
+          report = json.load(open("smoke.json"))
+          total = report["summary"]["total_findings"]
+          cwes = {f["cwe"] for f in report["findings"]}
+          assert total >= 8, f"expected >= 8 findings, got {total}"
+          assert {"CWE-89", "CWE-78", "CWE-79", "CWE-798"} <= cwes, cwes
+          verified = [p for p in report["patches"] if p["status"] == "verified"]
+          assert verified, "expected at least one verified patch"
+          print(f"smoke OK: {total} findings, {len(verified)} verified patches")
+          PY

@@ -1,0 +1,7 @@
+# Core runtime — lightweight, no GPU required (rule-based baseline works standalone).
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+python-multipart>=0.0.9
+pyyaml>=6.0
+httpx>=0.27

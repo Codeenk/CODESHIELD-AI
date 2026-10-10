@@ -1,0 +1,82 @@
+name: "CodeShield AI Scan"
+description: "Scan code for vulnerabilities and fail the check when findings exceed a severity gate."
+author: "CodeShield AI Team"
+
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  target:
+    description: "Path or GitHub repo URL to scan."
+    required: false
+    default: "."
+  fail-on:
+    description: "Severity gate: low | medium | high | critical. Empty = never fail."
+    required: false
+    default: "high"
+  format:
+    description: "Report format to write: sarif | json | pdf."
+    required: false
+    default: "sarif"
+  output:
+    description: "Output file for the report."
+    required: false
+    default: "codeshield.sarif"
+  no-model:
+    description: "Run the rule-based baseline only (no neural detector)."
+    required: false
+    default: "true"
+  version:
+    description: "codeshield-ai version/ref to install."
+    required: false
+    default: "."
+
+outputs:
+  report:
+    description: "Path to the generated report."
+    value: ${{ steps.scan.outputs.report }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install CodeShield AI
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f "${{ github.action_path }}/pyproject.toml" ]; then
+          pip install "${{ github.action_path }}"
+        else
+          pip install codeshield-ai
+        fi
+
+    - name: Run scan
+      id: scan
+      shell: bash
+      run: |
+        set -o pipefail
+        ARGS=(scan "${{ inputs.target }}" --format "${{ inputs.format }}" --output "${{ inputs.output }}")
+        if [ "${{ inputs.no-model }}" = "true" ]; then ARGS+=(--no-model); fi
+        if [ -n "${{ inputs.fail-on }}" ]; then ARGS+=(--fail-on "${{ inputs.fail-on }}"); fi
+        echo "codeshield ${ARGS[*]}"
+        codeshield "${ARGS[@]}"
+        echo "report=${{ inputs.output }}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload SARIF to code scanning
+      if: ${{ always() && inputs.format == 'sarif' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.output }}
+
+    - name: Upload report artefact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: codeshield-report
+        path: ${{ inputs.output }}
+        if-no-files-found: warn

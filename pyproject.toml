@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codeshield-ai"
+version = "0.1.0"
+description = "AI-powered source code vulnerability scanner & explainable auto-repair engine"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "CodeShield AI Team" },
+]
+keywords = ["security", "sast", "codebert", "vulnerability-detection", "auto-repair"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+]
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "pydantic>=2.6",
+  "python-multipart>=0.0.9",
+  "pyyaml>=6.0",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+ml = [
+  "torch>=2.2",
+  "transformers>=4.40",
+  "numpy>=1.26",
+]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.4",
+]
+
+[project.scripts]
+codeshield = "codeshield.cli:main"
+
+[tool.setuptools]
+packages = [
+  "codeshield",
+  "codeshield.api",
+  "codeshield.core",
+  "codeshield.report",
+  "codeshield.agents",
+]
+
+[tool.setuptools.package-data]
+codeshield = ["web/*", "skills/*.md", "agents/prompts/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+ignore = ["E501"]

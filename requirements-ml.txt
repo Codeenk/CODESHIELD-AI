@@ -1,0 +1,6 @@
+# Optional neural detector stack. Install only where a GPU/CPU budget exists.
+# The pipeline degrades gracefully when these are absent.
+-r requirements.txt
+torch>=2.2
+transformers>=4.40
+numpy>=1.26

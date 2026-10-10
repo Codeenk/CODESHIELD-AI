@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node (dashboard dev tooling, if any)
+node_modules/
+
+# Secrets / local config
+.env
+*.local
+
+# CodeShield artefacts
+.codeshield/
+strix_runs/
+*.sarif
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

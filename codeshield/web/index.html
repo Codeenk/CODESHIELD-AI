@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CodeShield AI — Vulnerability Scanner</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">🛡️</span><h1>CodeShield AI</h1></div>
+    <div class="topbar-right">
+      <span id="engine-badge" class="badge badge-muted">checking engines…</span>
+      <input id="token" type="password" placeholder="API token (if set)" autocomplete="off" />
+    </div>
+  </header>
+
+  <main>
+    <section class="panel scan-panel">
+      <h2>New scan</h2>
+      <div class="scan-controls">
+        <label class="file-drop">
+          <input id="file-input" type="file" accept=".py,.js,.ts,.jsx,.tsx,.java,.zip" />
+          <span>Choose a file or .zip</span>
+        </label>
+        <button id="upload-btn" class="primary">Scan file</button>
+        <span class="or">or</span>
+        <input id="github-url" type="url" placeholder="https://github.com/owner/repo" />
+        <button id="github-btn" class="primary">Scan repo</button>
+      </div>
+      <p id="scan-status" class="muted"></p>
+    </section>
+
+    <section id="summary" class="summary hidden">
+      <div class="cards" id="severity-cards"></div>
+      <div class="panel meta">
+        <div id="scan-meta"></div>
+        <div id="cwe-dist"></div>
+        <div class="exports">
+          <button data-report="json">JSON</button>
+          <button data-report="sarif">SARIF</button>
+          <button data-report="pdf">PDF</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="results">
+      <div class="panel findings-panel">
+        <h2>Findings <span id="finding-count" class="muted"></span></h2>
+        <div class="filters">
+          <select id="severity-filter"><option value="">All severities</option></select>
+          <select id="cwe-filter"><option value="">All CWEs</option></select>
+          <input id="text-filter" type="search" placeholder="Filter by file or title" />
+        </div>
+        <ul id="findings" class="findings"></ul>
+        <p id="findings-empty" class="muted">No scans yet. Run one above.</p>
+      </div>
+
+      <div class="panel detail-panel">
+        <div id="detail-placeholder" class="muted">Select a finding to see the explanation and patch.</div>
+        <div id="detail" class="hidden">
+          <h2 id="detail-title"></h2>
+          <div id="detail-tags" class="tags"></div>
+          <p id="detail-rationale"></p>
+          <p id="detail-remediation" class="muted"></p>
+          <div class="attribution">
+            <strong>Attribution</strong>
+            <div id="detail-attention" class="heatbar"></div>
+            <div id="detail-nodes" class="tags"></div>
+          </div>
+          <h3>Patch</h3>
+          <div id="patch-status" class="badge"></div>
+          <p id="patch-summary" class="muted"></p>
+          <div id="diff" class="diff"></div>
+          <div class="lifecycle">
+            <button data-life="false_positive">Mark false positive</button>
+            <button data-life="accepted_risk">Accept risk</button>
+            <button data-life="fixed">Mark fixed</button>
+            <button data-life="open">Reopen</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

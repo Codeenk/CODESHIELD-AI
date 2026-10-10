@@ -1,0 +1,59 @@
+name: CodeShield scan
+
+# Scan every pull request and block the merge when a high/critical finding appears.
+# Structure mirrors the strix GitHub Actions usage, adapted to a static SAST gate.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  codeshield:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install CodeShield AI
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Scan the product source, gated on high+ severity. Known/self findings are baselined via
+      # the fingerprint suppression file (FR-14), so only NEW issues fail the check.
+      - name: Scan the repository
+        run: |
+          set -o pipefail
+          python -m codeshield scan codeshield --no-model --format sarif -o codeshield.sarif \
+            --suppress .codeshield-suppress.txt --fail-on high
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: codeshield.sarif
+
+      - name: Upload JSON report
+        if: always()
+        run: |
+          python -m codeshield scan codeshield --no-model --format json -o codeshield.json \
+            --suppress .codeshield-suppress.txt || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codeshield-reports
+          path: |
+            codeshield.sarif
+            codeshield.json
+          if-no-files-found: warn
