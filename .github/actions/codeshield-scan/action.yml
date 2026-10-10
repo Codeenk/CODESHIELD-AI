@@ -1,0 +1,36 @@
+name: "CodeShield AI Scan"
+description: "Scan a path for vulnerabilities and fail the build when findings meet the severity gate."
+inputs:
+  path:
+    description: "Path (file or directory) to scan."
+    required: false
+    default: "."
+  fail-on:
+    description: "Fail the job when a finding at/above this severity exists (critical|high|medium|low)."
+    required: false
+    default: "high"
+  sarif-out:
+    description: "Path to write a SARIF report."
+    required: false
+    default: "codeshield.sarif"
+  model-mode:
+    description: "Detection model mode: off (rules-only), auto, or on."
+    required: false
+    default: "off"
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install CodeShield
+      shell: bash
+      run: pip install -r "${{ github.action_path }}/../../../backend/requirements.txt"
+    - name: Run scan
+      shell: bash
+      env:
+        CODESHIELD_MODEL_MODE: ${{ inputs.model-mode }}
+      run: |
+        python "${{ github.action_path }}/../../../backend/scripts/run_scan.py" \
+          "${{ inputs.path }}" --format sarif --out "${{ inputs.sarif-out }}" --fail-on "${{ inputs.fail-on }}"

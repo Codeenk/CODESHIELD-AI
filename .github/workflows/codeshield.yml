@@ -1,0 +1,27 @@
+name: CodeShield Security Scan
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  codeshield:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: CodeShield scan
+        uses: ./.github/actions/codeshield-scan
+        with:
+          path: samples
+          fail-on: critical
+          sarif-out: codeshield.sarif
+      - name: Upload SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: codeshield.sarif

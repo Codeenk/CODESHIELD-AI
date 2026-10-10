@@ -1,0 +1,5 @@
+# Optional: the CodeBERT insecure-code classifier.
+# Install with:  pip install -r requirements-ml.txt
+# Without these, the scanner runs rules-only and degrades gracefully.
+torch>=2.2
+transformers>=4.40

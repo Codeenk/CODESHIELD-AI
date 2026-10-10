@@ -1,0 +1,20 @@
+services:
+  codeshield:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: codeshield:latest
+    ports:
+      - "8000:8000"
+    environment:
+      # "off" for rules-only (fast, no downloads); "auto" uses CodeBERT if installed.
+      CODESHIELD_MODEL_MODE: "off"
+      # Uncomment to require a bearer token on the API:
+      # CODESHIELD_API_TOKEN: "change-me"
+      CODESHIELD_DATA_DIR: /data
+    volumes:
+      - codeshield-data:/data
+    restart: unless-stopped
+
+volumes:
+  codeshield-data:

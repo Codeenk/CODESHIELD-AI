@@ -1,0 +1,13 @@
+# CodeShield AI — core dependencies (no heavy ML).
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.5
+python-multipart>=0.0.9
+jinja2>=3.1
+reportlab>=4.0
+httpx>=0.27
+pytest>=8.0
+# Tree-sitter gives real ASTs for JavaScript/TypeScript/Java.
+# Python has a stdlib fallback; JS/Java degrade to a tolerant regex parser.
+tree-sitter>=0.21
+tree-sitter-language-pack>=0.1
