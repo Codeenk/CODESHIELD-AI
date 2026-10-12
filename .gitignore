@@ -22,3 +22,5 @@ codeshield.sarif
 
 # Local dev logs
 backend/server.log
+#coding Tool 
+.freebuff
