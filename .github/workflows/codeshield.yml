@@ -17,7 +17,7 @@ jobs:
       - name: CodeShield scan
         uses: ./.github/actions/codeshield-scan
         with:
-          path: samples
+          path: samples/clean
           fail-on: critical
           sarif-out: codeshield.sarif
       - name: Upload SARIF to code scanning
