@@ -143,7 +143,7 @@ The repository scaffold already encodes this decomposition. v2.0 treats these as
 | [`backend/codeshield/repair/`](../backend/codeshield/repair/) | Patch generation, candidate ranking |
 | [`backend/codeshield/sandbox/`](../backend/codeshield/sandbox/) | Isolated verification environment |
 | [`backend/codeshield/reporting/`](../backend/codeshield/reporting/) | PDF / JSON / SARIF generation |
-| [`backend/codeshield/store/`](../backend/codeshield/store/) | Scan history and metadata persistence |
+| [`backend/codeshield/store/`](../backend/codeshield/store.py) | Scan history and metadata persistence |
 | [`backend/codeshield/api/`](../backend/codeshield/api/) | REST API surface |
 | [`backend/codeshield/knowledge/`](../backend/codeshield/knowledge/) | **Vendored Strix knowledge base (Section 9)** |
 | [`models/`](../models/) | Model weights/registry placeholders |

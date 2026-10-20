@@ -58,7 +58,15 @@ def seed(reset: bool = False) -> int:
             config={"generate_patches": True, "model_mode": "off"},
         )
         store.create_scan(scan)
-        run_scan(scan, {"type": "upload", "files": uploads})
+        previous_provider = config.REPAIR_PROVIDER
+        previous_base_url = config.LLM_BASE_URL
+        config.REPAIR_PROVIDER = "none"
+        config.LLM_BASE_URL = ""
+        try:
+            run_scan(scan, {"type": "upload", "files": uploads})
+        finally:
+            config.REPAIR_PROVIDER = previous_provider
+            config.LLM_BASE_URL = previous_base_url
         store.save_scan_results(scan, scan.findings)
         created += 1
         print(

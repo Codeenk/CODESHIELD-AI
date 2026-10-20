@@ -43,33 +43,48 @@ detecting all seeded weaknesses in `samples/vulnerable`.
 
 ## Quick start
 
-Requires Python 3.11+ and Node 20+.
+Requires Python 3.11+ (3.12 recommended) and Node 20+. The Make targets use
+`uv`; the manual `pip` path is in [docs/SETUP.md](docs/SETUP.md).
 
 ```bash
-cp .env.example .env                 # optional; defaults are local-safe
-python -m venv .venv && . .venv/bin/activate
-pip install -r backend/requirements.txt
-cd frontend && npm ci --no-audit --no-fund && npm run build && cd ..
-
-python backend/scripts/seed_demo.py  # optional demo scans
-cd backend && python -m codeshield   # http://127.0.0.1:8000
+cp .env.example .env
+make install          # Python 3.12 venv, core deps, frontend deps
+make seed             # optional demo scans
+make serve            # build frontend, run API on :8000
 ```
 
-Or use the Makefile:
+The dashboard is at <http://127.0.0.1:8000>; interactive API docs at
+`/docs`. Demo account: `demo@codeshield.local` / `demo1234`. Set
+`CODESHIELD_AUTH=off` for a single-user local session.
+
+### Add the optional models
+
+Rules-only scanning works with `make install` alone. For CodeBERT detection and
+local LLM repairs:
 
 ```bash
-make install        # backend + frontend dependencies
-make seed           # demo dashboard data
-make serve          # build frontend, run API on :8000
-make dev            # backend :8000 + Vite :5173
-make test           # pytest suite
-make verify         # tests + self-scan + production build
+make install-ml       # PyTorch CPU wheel + Transformers
+make models           # CodeBERT + Qwen2.5-Coder 1.5B GGUF
+make llama            # prebuilt llama.cpp CPU server
+make model-server     # terminal 1: :8080
+make serve            # terminal 2: dashboard
 ```
 
-Demo account (created automatically): `demo@codeshield.local` / `demo1234`.
-Set `CODESHIELD_AUTH=off` to skip login for a local single-user session.
+Configure the endpoint in `.env`:
 
-Interactive API docs: <http://127.0.0.1:8000/docs>.
+```ini
+CODESHIELD_MODEL_MODE=on
+CODESHIELD_REPAIR_PROVIDER=llm
+CODESHIELD_LLM_BASE_URL=http://127.0.0.1:8080/v1
+CODESHIELD_LLM_MODEL=qwen2.5-coder-1.5b-instruct
+```
+
+See [docs/SETUP.md](docs/SETUP.md) for manual installation,
+[docs/MODELS.md](docs/MODELS.md) for hardware guidance and troubleshooting, and
+[docs/DEMO.md](docs/DEMO.md) for a full walkthrough.
+
+The Makefile also provides `make dev` (backend + Vite), `make test`,
+`make scan`, and `make verify`.
 
 ## CLI
 
@@ -162,21 +177,19 @@ See [.env.example](.env.example) for the full list. Common values:
 | --- | --- | --- |
 | `CODESHIELD_AUTH` | `on` | `on` local accounts (+ optional OAuth) · `off` single user |
 | `CODESHIELD_MODEL_MODE` | `auto` | `off` rules-only · `auto` use local weights · `on` require model |
+| `CODESHIELD_MODEL_DIR` | `models/detector` | Local CodeBERT directory |
 | `CODESHIELD_MODEL_ONLY` | `false` | Emit standalone model-only findings (off for precision) |
-| `CODESHIELD_REPAIR_PROVIDER` | `none` when unconfigured | `none` templates only · `llm` configured endpoint |
+| `CODESHIELD_REPAIR_PROVIDER` | `auto` | `none` templates only · `llm` configured endpoint |
+| `CODESHIELD_LLM_BASE_URL` | unset | OpenAI-compatible repair endpoint, e.g. local llama.cpp |
 | `CODESHIELD_RUN_TESTS` | `false` | Execute project tests during patch verification |
+| `CODESHIELD_SANDBOX` | `auto` | `auto` Docker→subprocess · `docker` · `subprocess` · `off` |
 | `CODESHIELD_RETAIN_CODE` | `false` | Persist full function bodies |
 | `CODESHIELD_DATA_DIR` / `CODESHIELD_DB` | `backend/data` | Storage location |
 | `CODESHIELD_API_TOKEN` | unset | Static CI bearer token |
 
-Optional ML dependencies:
-
-```bash
-pip install -r backend/requirements-ml.txt
-```
-
+`.env` is loaded automatically; existing environment variables take precedence.
 Without local weights and with downloads disabled, the detector reports itself
-unavailable and rules continue to run.
+unavailable and rules continue to run. Full reference: [.env.example](.env.example).
 
 ## Docker
 
@@ -206,3 +219,11 @@ The optional detector builds on
 `mrm8488/codebert-base-finetuned-detect-insecure-code` and `microsoft/codebert-base`.
 See [docs/CodeShield_AI_PRD.md](docs/CodeShield_AI_PRD.md) for the product
 requirements and measured-model caveats.
+
+## Documentation
+
+- [Setup](docs/SETUP.md) — install, configure, run, verify
+- [Models](docs/MODELS.md) — CodeBERT, local repair LLM, hardware and troubleshooting
+- [Sandbox](docs/SANDBOX.md) — Docker and subprocess test execution
+- [Operations](docs/OPERATIONS.md) — deployment, auth, backups, privacy, limits
+- [Demo](docs/DEMO.md) — end-to-end walkthrough and expected results

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import textwrap
 from typing import Any, Optional
 
 import httpx
@@ -39,27 +40,83 @@ def _prompt(finding: Finding, unit: CodeUnit) -> str:
     )
 
 
-def _extract_json(text: str) -> Optional[dict[str, Any]]:
+def _escape_control_chars(text: str) -> str:
+    """Escape raw newlines/tabs that local models emit inside JSON strings."""
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                out.append(char)
+                escaped = False
+            elif char == "\\":
+                out.append(char)
+                escaped = True
+            elif char == '"':
+                out.append(char)
+                in_string = False
+            elif char == "\n":
+                out.append("\\n")
+            elif char == "\r":
+                out.append("\\r")
+            elif char == "\t":
+                out.append("\\t")
+            else:
+                out.append(char)
+        else:
+            if char == '"':
+                in_string = True
+            out.append(char)
+    return "".join(out)
+
+
+def _normalize_triple_quotes(text: str) -> str:
+    """Convert Python-style triple-quoted JSON values into valid JSON strings."""
+    return re.sub(r'"""(.*?)"""', lambda match: json.dumps(match.group(1)), text, flags=re.S)
+
+
+def _parse_json(text: str) -> Optional[Any]:
+    normalized = _normalize_triple_quotes(text)
+    candidates = [text, normalized, _escape_control_chars(normalized), _escape_control_chars(text)]
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except ValueError:
+            pass
+        for opener, closer in (("[", "]"), ("{", "}")):
+            start = candidate.find(opener)
+            end = candidate.rfind(closer)
+            if start < 0 or end <= start:
+                continue
+            snippet = candidate[start:end + 1]
+            for attempt in (snippet, re.sub(r",\s*([}\]])", r"\1", snippet)):
+                try:
+                    return json.loads(attempt)
+                except ValueError:
+                    continue
+    return None
+
+
+def _extract_json(text: str) -> Optional[Any]:
     cleaned = text.strip()
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
     cleaned = re.sub(r"\s*```$", "", cleaned)
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        return json.loads(cleaned[start:end + 1])
-    except ValueError:
-        return None
+    return _parse_json(cleaned)
 
 
-def _from_payload(payload: dict[str, Any], finding: Finding, unit: CodeUnit) -> list[TemplateFix]:
-    fixes = payload.get("fixes") or []
+def _from_payload(payload: Any, finding: Finding, unit: CodeUnit) -> list[TemplateFix]:
+    if isinstance(payload, dict):
+        fixes = payload.get("fixes") or []
+    elif isinstance(payload, list):
+        fixes = payload
+    else:
+        fixes = []
     results: list[TemplateFix] = []
     for fix in fixes[: config.REPAIR_MAX_CANDIDATES]:
         if not isinstance(fix, dict):
             continue
-        source = str(fix.get("source") or "").strip()
+        source = textwrap.dedent(str(fix.get("source") or "")).strip()
         if not source or source == unit.source.strip():
             continue
         if unit.language == "python":

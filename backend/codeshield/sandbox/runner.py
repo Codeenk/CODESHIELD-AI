@@ -73,7 +73,10 @@ class TestRunner:
         self.workspace_root = workspace_root
         self.has_tests = bool(workspace_root and _has_tests(workspace_root))
         self.enabled = bool(
-            config.RUN_TESTS and self.has_tests and workspace_root is not None
+            config.RUN_TESTS
+            and self.has_tests
+            and workspace_root is not None
+            and config.SANDBOX_MODE not in {"off", "disabled", "none", "false"}
         )
         self._baseline: Optional[TestOutcome] = None
         self._files = files

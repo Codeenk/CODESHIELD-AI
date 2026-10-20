@@ -56,7 +56,12 @@ class _Detector:
             )
         self.source = source
         self.tokenizer = AutoTokenizer.from_pretrained(source)
-        self.model = AutoModelForSequenceClassification.from_pretrained(source)
+        try:
+            self.model = AutoModelForSequenceClassification.from_pretrained(
+                source, attn_implementation="eager"
+            )
+        except (TypeError, ValueError):
+            self.model = AutoModelForSequenceClassification.from_pretrained(source)
         self.model.to(self.device)
         self.model.eval()
         self.insecure_index = self._insecure_index()
@@ -189,13 +194,13 @@ def _get_detector() -> Optional[_Detector]:
     with _lock:
         if _load_attempted:
             return _loaded
-        _load_attempted = True
         try:
             _loaded = _Detector()
             _load_error = ""
         except Exception as exc:
             _loaded = None
             _load_error = str(exc)[:400]
+        _load_attempted = True
     return _loaded
 
 

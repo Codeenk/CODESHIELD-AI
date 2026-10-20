@@ -9,6 +9,14 @@ VERSION = "3.0.0"
 PACKAGE_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = PACKAGE_DIR.parent
 REPO_DIR = BACKEND_DIR.parent
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(REPO_DIR / ".env", override=False)
+except ImportError:
+    pass
+
 KNOWLEDGE_DIR = PACKAGE_DIR / "knowledge"
 VULN_KB_DIR = KNOWLEDGE_DIR / "vulnerabilities"
 FRONTEND_DIR = REPO_DIR / "frontend"

@@ -3,3 +3,5 @@
 # Without these, the scanner runs rules-only and degrades gracefully.
 torch>=2.2
 transformers>=4.40
+accelerate>=0.30
+huggingface-hub>=0.23

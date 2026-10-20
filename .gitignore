@@ -7,6 +7,10 @@ __pycache__/
 venv/
 
 # CodeShield runtime data
+# Downloaded model weights are large and reproducible via scripts/download_models.py.
+models/
+.tools/
+.env
 backend/data/
 *.db
 *.sqlite
