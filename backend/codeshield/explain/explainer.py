@@ -1,144 +1,275 @@
-"""Explain a finding: where it is, why it is risky, and how to fix it.
-
-Attribution for the MVP is evidence-driven (rule hits, dangerous sinks and
-taint tokens) rather than raw attention weights; the interface is deliberately
-the same shape a gradient/attention method would return, so a stronger
-attributor can be dropped in without touching callers.
-"""
+"""Knowledge-grounded explanations, evidence attribution, and AST citations."""
 from __future__ import annotations
 
 import ast
+import json
 import re
-from typing import Optional
+from functools import lru_cache
+from typing import Any, Optional
 
-from ..knowledge.loader import KnowledgeBase, get_knowledge_base
-from ..schemas import CodeUnit, Evidence, Finding
+from .. import config
+from ..detection import model as model_module
+from ..knowledge.loader import get_knowledge_base
+from ..schemas import AstNode, CodeUnit, Finding
 
-# Concise remediation guidance used to constrain and explain repairs.
-REMEDIATION: dict[str, str] = {
-    "sql_injection": "Use parameterized queries / prepared statements; never concatenate input into SQL.",
-    "rce": "Avoid shell=True and eval/exec; pass argument lists and validate/allow-list input.",
-    "insecure_deserialization": "Do not deserialize untrusted data with pickle/marshal; use a safe format such as JSON.",
-    "path_traversal_lfi_rfi": "Canonicalize and confine paths; validate against an allow-list and reject '..'.",
-    "ssrf": "Resolve and allow-list hosts; block private/link-local ranges and redirects.",
-    "xss": "Apply context-aware output encoding; prefer textContent over innerHTML; enable CSP.",
-    "open_redirect": "Only redirect to a validated relative path or an allow-listed host.",
-    "prototype_pollution": "Allow-list keys and reject __proto__/constructor/prototype before merging.",
-    "information_disclosure": "Remove hard-coded secrets and debug flags; load secrets from the environment.",
-    "cryptographic_failures": "Replace broken primitives (MD5/SHA1/DES) with SHA-256 or a password KDF.",
-    "xxe": "Disable external entity resolution or use defusedxml.",
-    "nosql_injection": "Validate request fields and cast to expected scalar types before querying.",
-    "ssti": "Never render user input as a template; pass data as context.",
-    "race_conditions": "Use atomic operations or locks instead of check-then-use.",
+_DANGER_TERMS = {
+    "eval": 1.0, "exec": 1.0, "os.system": 1.0, "subprocess": 0.8, "shell=true": 0.95,
+    "pickle": 0.9, "yaml.load": 0.8, "execute": 0.7, "executemany": 0.7, "query(": 0.7,
+    "innerhtml": 0.9, "outerhtml": 0.9, "dangerouslysetinnerhtml": 0.95, "document.write": 0.85,
+    "open(": 0.5, "send_file": 0.7, "requests.": 0.6, "httpx.": 0.6, "fetch(": 0.6,
+    "redirect(": 0.7, "password": 0.6, "secret": 0.7, "api_key": 0.8, "verify=false": 0.9,
+    "md5": 0.5, "sha1": 0.5, "deserialize": 0.9, "readobject": 0.9, "createhash": 0.5,
+    "render_template_string": 0.95, "fromstring": 0.7, "xml": 0.4,
 }
-
-_DANGER = re.compile(
-    r"execute|query|system|popen|eval|exec|loads?|innerHTML|md5|sha1|secret|password|"
-    r"open\(|send_file|redirect|assign|merge|render_template_string",
-    re.IGNORECASE,
-)
-_TAINT = re.compile(
-    r"request|req\.|input\(|argv|environ|params|payload|userdata|self\.\w+", re.IGNORECASE
-)
+_SOURCE_TERMS = ("request.", "req.", "input(", "argv", "filename", "userinput", "params", "body")
 
 
-class ExplainEngine:
-    def __init__(self, kb: Optional[KnowledgeBase] = None) -> None:
-        self.kb = kb or get_knowledge_base()
+@lru_cache(maxsize=1)
+def _remediations() -> dict[str, dict[str, Any]]:
+    path = config.KNOWLEDGE_DIR / "remediations.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
 
-    # -- attribution -------------------------------------------------------
-    def attribute(self, unit: CodeUnit, finding: Finding, top_k: int = 5) -> list[Evidence]:
-        evidence_by_line = {e.line: e for e in finding.evidence}
-        lines = unit.source.splitlines()
-        scored: list[Evidence] = []
-        for idx, raw in enumerate(lines, start=1):
-            abs_line = unit.start_line + idx - 1
-            score = 0.0
-            reasons: list[str] = []
-            if abs_line in evidence_by_line:
-                score += 1.0
-                reasons.append("rule evidence")
-            if _DANGER.search(raw):
-                score += 0.6
-                reasons.append("dangerous sink")
-            if _TAINT.search(raw):
+
+def _kb_excerpt(slug: str) -> str:
+    item = get_knowledge_base().get(slug)
+    if not item or not item.description:
+        return ""
+    return item.description[:900]
+
+
+def _kb_remediation_section(slug: str) -> list[str]:
+    if not re.fullmatch(r"[a-z0-9_]{1,80}", slug or ""):
+        return []
+    path = config.VULN_KB_DIR / f"{slug}.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    match = re.search(r"^## (?:Remediation|Prevention|Mitigation|Defense)\s*$", text, re.MULTILINE | re.IGNORECASE)
+    if not match:
+        return []
+    section = text[match.end():]
+    next_heading = re.search(r"^##\s", section, re.MULTILINE)
+    if next_heading:
+        section = section[:next_heading.start()]
+    bullets = []
+    for line in section.splitlines():
+        cleaned = line.strip().lstrip("-*").strip()
+        if len(cleaned) > 15:
+            bullets.append(cleaned)
+    return bullets[:5]
+
+
+def _lexical_weights(unit: CodeUnit, evidence_lines: set[int]) -> dict[int, float]:
+    weights: dict[int, float] = {line: 1.0 for line in evidence_lines}
+    for index, line in enumerate(unit.source.splitlines()):
+        line_no = unit.start_line + index
+        lowered = line.lower()
+        score = 0.0
+        for term, value in _DANGER_TERMS.items():
+            if term in lowered:
+                score += value
+        for term in _SOURCE_TERMS:
+            if term in lowered:
                 score += 0.35
-                reasons.append("tainted input")
-            if score > 0:
-                scored.append(
-                    Evidence(
-                        line=abs_line,
-                        snippet=raw.strip()[:200],
-                        reason=", ".join(reasons),
-                        weight=round(score, 3),
-                    )
-                )
-        scored.sort(key=lambda e: (-e.weight, e.line))
-        return scored[:top_k]
+        if score and line_no not in weights:
+            weights[line_no] = score
+    if not weights:
+        weights[unit.start_line] = 1.0
+    maximum = max(weights.values()) or 1.0
+    return {line: value / maximum for line, value in weights.items()}
 
-    def _ast_nodes(self, unit: CodeUnit, evidence: list[Evidence], top_k: int = 3) -> list[dict]:
-        if unit.language != "python":
-            return []
+
+def _attention_weights(unit: CodeUnit, evidence_lines: set[int]) -> tuple[Optional[dict[int, float]], Optional[dict[str, Any]]]:
+    analysis = model_module.analyze(unit)
+    if analysis is None or not analysis.tokens:
+        return None, None
+    weights: dict[int, float] = {}
+    for token in analysis.tokens:
+        line = unit.start_line + token.line - 1
+        if token.weight > weights.get(line, 0.0):
+            weights[line] = token.weight
+    for line in evidence_lines:
+        weights[line] = min(1.0, weights.get(line, 0.0) + 0.6)
+    maximum = max(weights.values()) or 1.0
+    weights = {line: value / maximum for line, value in weights.items()}
+    top_lines = sorted(weights, key=lambda line: -weights[line])[:5]
+    agreement = len(set(top_lines) & evidence_lines) / max(1, len(set(top_lines) | evidence_lines))
+    metadata = {
+        "method": analysis.method,
+        "probability": analysis.probability,
+        "agreement": round(agreement, 2),
+        "cwe_scores": analysis.cwe_scores,
+    }
+    return weights, metadata
+
+
+def _python_nodes(unit: CodeUnit, evidence_lines: set[int]) -> list[AstNode]:
+    try:
+        tree = ast.parse(unit.source)
+    except SyntaxError:
+        return _lexical_nodes(unit, evidence_lines)
+    nodes: list[AstNode] = []
+    sources = unit.source.splitlines()
+    for node in ast.walk(tree):
+        line = getattr(node, "lineno", None)
+        if line is None:
+            continue
+        absolute = line + unit.start_line - 1
+        if absolute not in evidence_lines and not any(abs(absolute - target) <= 1 for target in evidence_lines):
+            continue
+        node_type = type(node).__name__
+        role = "context"
+        snippet = ""
         try:
-            tree = ast.parse(unit.source)
-        except SyntaxError:
-            return []
-        nodes: list[dict] = []
-        for ev in evidence:
-            rel = ev.line - unit.start_line + 1
-            best = None
-            for node in ast.walk(tree):
-                start = getattr(node, "lineno", None)
-                end = getattr(node, "end_lineno", None)
-                if start is None or end is None:
-                    continue
-                if start <= rel <= end:
-                    span = end - start
-                    if best is None or span < best[1]:
-                        best = (node, span)
-            if best is not None:
-                nodes.append(
-                    {
-                        "line": ev.line,
-                        "node_type": type(best[0]).__name__,
-                        "col": getattr(best[0], "col_offset", 0),
-                    }
+            snippet = (ast.get_source_segment(unit.source, node) or "")[:240]
+        except Exception:
+            snippet = sources[line - 1][:240] if 0 <= line - 1 < len(sources) else ""
+        lowered = snippet.lower()
+        if any(term in lowered for term in ("eval", "exec", "execute", "system", "pickle", "innerhtml", "open(", "fetch(", "redirect")):
+            role = "sink"
+        if any(term in lowered for term in ("request", "req.", "input(", "argv", "filename")):
+            role = "source"
+        if node_type in {"Call", "Assign", "Attribute", "Subscript", "BinOp", "JoinedStr", "Dict", "Constant"}:
+            nodes.append(
+                AstNode(
+                    line=absolute, node_type=node_type, col=getattr(node, "col_offset", 0),
+                    snippet=snippet, role=role,
                 )
-            if len(nodes) >= top_k:
-                break
-        return nodes
+            )
+    return _dedupe_nodes(nodes)[:28]
 
-    # -- public ------------------------------------------------------------
-    def explain(self, finding: Finding, unit: CodeUnit) -> dict:
-        evidence = self.attribute(unit, finding)
-        if not finding.evidence:
-            finding.evidence = evidence
-        item = self.kb.for_slug(finding.knowledge_ref) if finding.knowledge_ref else None
-        why = item.description if item else (
-            "No specific knowledge module matched; the classifier flagged the function as insecure."
+
+def _lexical_nodes(unit: CodeUnit, evidence_lines: set[int]) -> list[AstNode]:
+    nodes: list[AstNode] = []
+    lines = unit.source.splitlines()
+    for index, line in enumerate(lines):
+        absolute = unit.start_line + index
+        if absolute not in evidence_lines and not any(abs(absolute - target) <= 1 for target in evidence_lines):
+            continue
+        match = re.search(r"([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(", line)
+        if match:
+            role = "source" if any(term in line.lower() for term in _SOURCE_TERMS) else "sink"
+            nodes.append(
+                AstNode(line=absolute, node_type="call", col=match.start(), snippet=line.strip()[:240], role=role)
+            )
+        elif "=" in line:
+            nodes.append(AstNode(line=absolute, node_type="assignment", snippet=line.strip()[:240], role="context"))
+    return _dedupe_nodes(nodes)[:24]
+
+
+def _treesitter_nodes(unit: CodeUnit, evidence_lines: set[int]) -> list[AstNode]:
+    try:
+        from tree_sitter_language_pack import get_parser
+        parser = get_parser("tsx" if unit.language == "tsx" else unit.language)
+    except Exception:
+        return _lexical_nodes(unit, evidence_lines)
+    try:
+        tree = parser.parse(unit.source.encode("utf-8"))
+    except Exception:
+        return _lexical_nodes(unit, evidence_lines)
+    nodes: list[AstNode] = []
+    interesting = {
+        "call_expression", "method_invocation", "assignment_expression", "assignment",
+        "binary_expression", "member_expression", "field_access", "object_creation_expression",
+        "template_string", "string_literal", "variable_declarator", "local_variable_declaration",
+    }
+
+    def visit(node) -> None:
+        line = node.start_point[0] + unit.start_line
+        if line in evidence_lines or any(abs(line - target) <= 1 for target in evidence_lines):
+            if node.type in interesting:
+                snippet = unit.source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+                lowered = snippet.lower()
+                role = "context"
+                if any(term in lowered for term in ("eval", "exec", "query", "system", "innerhtml", "open", "readfile", "fetch", "redirect")):
+                    role = "sink"
+                if any(term in lowered for term in ("req.", "request", "location", "process.argv")):
+                    role = "source"
+                nodes.append(
+                    AstNode(line=line, node_type=node.type, col=node.start_point[1],
+                            snippet=snippet.strip()[:240], role=role)
+                )
+        for child in node.children:
+            visit(child)
+
+    visit(tree.root_node)
+    return _dedupe_nodes(nodes)[:28]
+
+
+def _dedupe_nodes(nodes: list[AstNode]) -> list[AstNode]:
+    seen: set[tuple[int, str, str]] = set()
+    output = []
+    for node in sorted(nodes, key=lambda n: (n.line, n.col)):
+        key = (node.line, node.node_type, node.snippet)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(node)
+    return output
+
+
+def explain_finding(finding: Finding, unit: Optional[CodeUnit], enable_model: bool = True) -> dict[str, Any]:
+    slug = finding.knowledge_ref or ""
+    kb = get_knowledge_base().get(slug) if slug else None
+    remediation_data = _remediations().get(slug, {})
+    evidence_lines = {item.line for item in finding.evidence}
+    method = "rules"
+    model_meta: Optional[dict[str, Any]] = None
+    weights: dict[int, float]
+    if unit is not None:
+        attention, model_meta = _attention_weights(unit, evidence_lines) if enable_model else (None, None)
+        if attention and model_meta and model_meta.get("method") == "attention-rollout":
+            weights = attention
+            method = "attention-rollout"
+        else:
+            weights = _lexical_weights(unit, evidence_lines)
+        finding.ast_nodes = (
+            _python_nodes(unit, evidence_lines) if unit.language == "python"
+            else _treesitter_nodes(unit, evidence_lines)
         )
-        remediation = (
-            REMEDIATION.get(finding.knowledge_ref or "", "")
-            or "Review the flagged lines and apply the framework's built-in defence."
-        )
-        summary = (
-            f"{finding.cwe_title or finding.cwe} ({finding.cwe}): {finding.message} "
-            f"Severity {finding.severity.upper()} (confidence {finding.confidence:.0%}), "
-            f"engine={finding.engine}."
-        )
-        return {
-            "summary": summary,
-            "why": why,
-            "remediation": remediation,
+    else:
+        weights = {line: 1.0 for line in evidence_lines}
+        finding.ast_nodes = []
+
+    remediation = remediation_data.get("remediation") or _kb_remediation_section(slug) or [
+        "Validate untrusted input at the boundary and apply the security control described in the linked guidance.",
+        "Add a regression test that reproduces the issue and fails without the fix.",
+    ]
+    references = remediation_data.get("references") or []
+    if kb and kb.cwe:
+        references = references or [f"https://cwe.mitre.org/data/definitions/{kb.cwe.split('-')[-1]}.html"]
+    excerpt = _kb_excerpt(slug)
+    summary = (
+        f"{finding.cwe_title or kb.cwe_title if kb else finding.cwe_title} in "
+        f"{finding.function} at {finding.path}:{finding.evidence[0].line if finding.evidence else finding.start_line}."
+    )
+    explanation = {
+        "summary": summary,
+        "why": excerpt or (finding.evidence[0].reason if finding.evidence else "") or finding.message,
+        "attack": remediation_data.get("attack", "The data path shown in the evidence reaches a dangerous operation without an effective control."),
+        "remediation": remediation,
+        "references": references,
+        "evidence": [item.model_dump() for item in finding.evidence],
+        "attribution": {
+            "method": method,
+            "lines": [
+                {"line": line, "weight": round(weight, 3)}
+                for line, weight in sorted(weights.items(), key=lambda item: -item[1])[:24]
+            ],
+            "model": model_meta,
+        },
+        "knowledge": {
+            "slug": slug,
+            "name": kb.name if kb else finding.cwe_title,
             "cwe": finding.cwe,
-            "cwe_title": finding.cwe_title,
-            "owasp": finding.owasp,
+            "owasp": finding.owasp or (kb.owasp if kb else ""),
             "severity": finding.severity,
-            "confidence": finding.confidence,
-            "engine": finding.engine,
-            "knowledge_ref": finding.knowledge_ref,
-            "knowledge_name": item.name if item else None,
-            "evidence": [e.model_dump() for e in evidence],
-            "ast_nodes": self._ast_nodes(unit, evidence),
-            "attribution_method": "heuristic-evidence",
-        }
+            "description": excerpt,
+        },
+        "generator": "knowledge-grounded",
+    }
+    return explanation

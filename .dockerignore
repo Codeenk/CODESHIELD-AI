@@ -1,0 +1,13 @@
+.git
+.github
+node_modules
+frontend/node_modules
+frontend/dist
+backend/data
+backend/__pycache__
+**/__pycache__
+.pytest_cache
+models
+*.db
+*.sarif
+*.log

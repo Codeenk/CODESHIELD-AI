@@ -1,111 +1,200 @@
-# 🛡️ CodeShield AI
+# CodeShield AI
 
-AI-powered source-code vulnerability scanner with **explainable auto-repair**.
-Scans Python, JavaScript/TypeScript, and Java; explains each finding at line and
-AST-node level; and proposes a **verified** patch a developer can accept.
+Precision-first source-code review with explainable findings and verified repairs.
 
-> MVP status. See [docs/CodeShield_AI_PRD.md](docs/CodeShield_AI_PRD.md) for the full product requirements.
+CodeShield scans Python, JavaScript/TypeScript, and Java, shows the exact lines and
+functions behind each finding, grounds explanations in a vendored vulnerability
+knowledge base, and proposes patches that are re-parsed and re-scanned before they
+are shown. Optional CodeBERT detection and LLM repair plug in when models are
+available; the product works fully without them.
+
+> Decision support, not certification. Every finding is a review candidate and
+> every patch still needs human review.
 
 ## What it does
 
-1. **Ingest** — paste code, upload files/`.zip`, or point at a GitHub repo (shallow, read-only clone).
-2. **Parse** — function-level units via Python's `ast` and Tree-sitter for JS/TS/Java.
-3. **Detect** — a transparent rule engine plus an optional CodeBERT classifier
-   (`mrm8488/codebert-base-finetuned-detect-insecure-code`). Rule + model agreement raises confidence.
-4. **Explain** — line evidence, AST nodes, and a rationale grounded in the vendored
-   vulnerability knowledge base (29 modules), mapped to CWE and OWASP Top 10:2025.
-5. **Repair** — per-flaw patch templates (and a safe advisory fallback), each
-   **verified** by re-parsing and re-scanning before it is shown.
-6. **Report** — JSON, SARIF 2.1.0, HTML, and PDF; scan history with finding lifecycle.
+1. **Ingest** — paste a snippet, upload files or a bounded `.zip`, or shallow-clone
+   an allowlisted public repository.
+2. **Parse** — Python `ast` plus Tree-sitter for JavaScript/TypeScript/Java, with a
+   tolerant fallback parser.
+3. **Detect** — deterministic AST rules with scoped taint tracking, deduplicated by
+   `(path, CWE, line)` and fingerprinted for tracking across scans. Optional
+   CodeBERT inference boosts confidence when it agrees with a rule; it never
+   creates rule-less findings unless explicitly enabled.
+4. **Explain** — evidence lines, rationale, CWE/OWASP mapping, and citations into
+   the knowledge base (`backend/codeshield/knowledge/`).
+5. **Repair** — language-aware templates plus optional Qwen/OpenAI-compatible
+   generation. Each candidate is checked for syntax, remaining findings, new
+   high-risk findings, and signature preservation; tests run only when opted in.
+6. **Report** — JSON, SARIF 2.1.0, HTML, and PDF; scan history, comparison,
+   suppression with fingerprints, and a responsive security console.
 
-## Layout
+Verified locally: the scanner reports **0 findings on its own backend** while
+detecting all seeded weaknesses in `samples/vulnerable`.
 
-```
-backend/codeshield/
-  ingestion/  parsing/  detection/  explain/  repair/
-  sandbox/    reporting/ store/     api/      knowledge/   # vendored Strix KB (Apache-2.0)
-backend/scripts/run_scan.py        # CLI
-backend/tests/                     # pytest suite
-frontend/                          # React + Vite + Monaco dashboard
-samples/{vulnerable,clean}/        # demo corpus
-docker/                            # Dockerfile + compose
-.github/                           # CI + reusable scan action
-```
+## Screens
+
+- **Overview** — open exposure, severity mix, trend, top CWEs, recent scans.
+- **New scan** — repository, files, archive, or snippet with project grouping.
+- **Scan detail** — filterable findings, evidence, source, repair diff, status history.
+- **History / Compare** — revision deltas: new, fixed, recurring, resolved.
+- **Knowledge** — vulnerability modules plus the live rule catalog.
+- **Settings** — runtime, model, sandbox, privacy, and limit status.
 
 ## Quick start
 
-### Backend
+Requires Python 3.11+ and Node 20+.
 
 ```bash
-cd backend
-pip install -r requirements.txt          # core
-pip install -r requirements-ml.txt       # optional: CodeBERT detector
-python -m pytest -q                      # run tests
-python -m codeshield                     # serve on http://127.0.0.1:8000
+cp .env.example .env                 # optional; defaults are local-safe
+python -m venv .venv && . .venv/bin/activate
+pip install -r backend/requirements.txt
+cd frontend && npm ci --no-audit --no-fund && npm run build && cd ..
+
+python backend/scripts/seed_demo.py  # optional demo scans
+cd backend && python -m codeshield   # http://127.0.0.1:8000
 ```
+
+Or use the Makefile:
+
+```bash
+make install        # backend + frontend dependencies
+make seed           # demo dashboard data
+make serve          # build frontend, run API on :8000
+make dev            # backend :8000 + Vite :5173
+make test           # pytest suite
+make verify         # tests + self-scan + production build
+```
+
+Demo account (created automatically): `demo@codeshield.local` / `demo1234`.
+Set `CODESHIELD_AUTH=off` to skip login for a local single-user session.
 
 Interactive API docs: <http://127.0.0.1:8000/docs>.
 
-### Frontend
+## CLI
 
 ```bash
-cd frontend
-npm install
-npm run dev        # dev server on :5173, proxies /api to :8000
-npm run build      # builds dist/, which the backend serves at /
+python backend/scripts/run_scan.py samples/vulnerable
+python backend/scripts/run_scan.py samples/vulnerable --format sarif --out codeshield.sarif
+python backend/scripts/run_scan.py backend/codeshield --fail-on high   # self-scan, exit 0
+python backend/scripts/run_scan.py --repo https://github.com/org/app --branch main
 ```
 
-### Docker
+Exit codes: `0` no findings at/above the gate, `2` findings at/above the gate,
+`1` ingestion or runtime error.
+
+## Tests
 
 ```bash
-docker build -f docker/Dockerfile -t codeshield .
-docker run --rm -p 8000:8000 codeshield
-# or: docker compose -f docker/docker-compose.yml up --build
+cd backend && python -m pytest -q
 ```
 
-## Command line
-
-```bash
-cd backend
-python scripts/run_scan.py ../samples/vulnerable          # text report, exit 2 if high+
-python scripts/run_scan.py ../samples/clean --fail-on high
-python scripts/run_scan.py --repo https://github.com/org/app --format sarif --out out.sarif
-```
-
-Exit codes: `0` no findings at/above the gate, `2` findings at/above the gate, `1` error.
+The suite covers detection precision (including the self-scan), parser behavior,
+guarded/tainted data flow, patch verification, reporting, the REST API, and auth.
+CI runs the same suite plus a self-scan and a production frontend build.
 
 ## API
 
+All routes are under `/api/v1` unless noted.
+
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/health` | Status + knowledge-base counts |
-| GET | `/api/v1/knowledge` | Skill and vulnerability modules |
-| POST | `/api/v1/scans` | Scan uploads (multipart), inline `{code,filename}`, or `{repo_url,branch}` |
-| GET | `/api/v1/scans` · `/api/v1/scans/{id}` | List / fetch scans |
-| GET | `/api/v1/scans/{id}/findings` · `/api/v1/findings/{id}` | Findings |
-| GET | `/api/v1/findings/{id}/patches` | Verified patch candidates |
-| POST | `/api/v1/findings/{id}/status` | `open` / `fixed` / `false_positive` / `accepted_risk` |
-| GET | `/api/v1/scans/{id}/report?format=json\|sarif\|html\|pdf` | Reports |
+| GET | `/health` | Liveness and database status |
+| GET | `/meta` | Model, repair, sandbox, privacy, and limit capabilities |
+| GET | `/knowledge`, `/knowledge/{slug}` | Modules, rule catalog, and summary |
+| POST | `/scans` | Create a scan (multipart: `source_type`, `files`, `repo_url`, `code`, …) |
+| GET | `/scans`, `/scans/{id}` | List / fetch scans with findings |
+| POST | `/scans/{id}/cancel` · DELETE `/scans/{id}` | Cancel or delete |
+| GET | `/scans/compare?base=&head=` | New, fixed, recurring, resolved findings |
+| GET | `/scans/{id}/report?format=json\|sarif\|html\|pdf` | Export (`&download=1` to attach) |
+| GET / PATCH | `/findings/{id}` | Fetch or update status (`open`, `fixed`, `false_positive`, `accepted_risk`) |
+| GET | `/findings/{id}/events` | Status audit trail |
+| GET | `/projects`, `/stats` | Grouping and dashboard metrics |
+| POST | `/auth/register`, `/auth/login`, `/auth/logout` | Local accounts |
+| GET | `/auth/me` | Current user and capability flags |
+| GET | `/auth/github`, `/auth/github/callback` | Optional GitHub OAuth |
 
-## Configuration (environment)
+Authentication uses opaque hashed session tokens in HttpOnly cookies (or
+`Authorization: Bearer <CODESHIELD_API_TOKEN>` in CI). Passwords use `scrypt`.
+With `CODESHIELD_AUTH=off`, requests run as the local demo analyst.
+
+## Architecture
+
+```
+backend/codeshield/
+  ingestion/   bounded zip, upload, snippet, and validated git clones
+  parsing/     Python AST + Tree-sitter units with tolerant fallbacks
+  detection/   rules + scoped taint + optional CodeBERT fusion
+  explain/     KB-grounded explanations
+  repair/      templates, optional LLM, verification
+  sandbox/     static verification + optional isolated test runs
+  reporting/   JSON / SARIF / HTML / PDF
+  api/         FastAPI routers and SPA hosting
+  store.py     SQLite (WAL) projects, scans, findings, suppressions, events
+  pipeline.py  ingest → parse → detect → explain → repair → finalize
+frontend/      React 18 + Vite + React Router (HashRouter)
+samples/       vulnerable and clean demo corpus
+docker/        multi-stage production image + compose
+.github/       CI, reusable scan action, SARIF upload
+```
+
+SQLite and an in-process worker pool keep deployment simple. Run a single server
+process because jobs are in-process; the database remains durable across restarts
+and stale running scans are marked interrupted on startup.
+
+## Privacy and safety
+
+- Full function bodies are **discarded** unless `CODESHIELD_RETAIN_CODE=true`; the
+  UI shows retained evidence snippets and patch diffs instead.
+- `CODESHIELD_MASK_SECRETS=true` masks credentials before persistence and export.
+- Uploaded code is never executed by default. Test execution is opt-in
+  (`CODESHIELD_RUN_TESTS=true`), bounded by timeout and, when available, a container.
+- Archives are entry/size/ratio limited; repository clones are HTTPS-only,
+  host-allowlisted, depth-1, and read-only.
+- Security headers include a strict CSP, `nosniff`, `DENY` framing, and a
+  no-referrer policy.
+
+## Configuration
+
+See [.env.example](.env.example) for the full list. Common values:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `CODESHIELD_MODEL_MODE` | `auto` | `off` rules-only · `auto` use model if available · `on` require model |
-| `CODESHIELD_MODEL` | `mrm8488/codebert-base-finetuned-detect-insecure-code` | Detection checkpoint |
-| `CODESHIELD_MODEL_ONLY` | `0` | Emit standalone model-only findings. Off by default — the binary checkpoint flags most code, so it corroborates rather than detects. |
-| `CODESHIELD_API_TOKEN` | *(unset)* | When set, require `Authorization: Bearer <token>` on `/api/v1` |
-| `CODESHIELD_HOST` / `CODESHIELD_PORT` | `127.0.0.1` / `8000` | Server bind |
-| `CODESHIELD_DB` | `backend/data/codeshield.db` | SQLite location |
-| `CODESHIELD_RUN_TESTS` | `0` | Opt in to executing a project's pytest inside the sandbox |
-| `CODESHIELD_MAX_FILE_BYTES` / `..._ARCHIVE_BYTES` | 5 MB / 50 MB | Ingestion limits |
+| `CODESHIELD_AUTH` | `on` | `on` local accounts (+ optional OAuth) · `off` single user |
+| `CODESHIELD_MODEL_MODE` | `auto` | `off` rules-only · `auto` use local weights · `on` require model |
+| `CODESHIELD_MODEL_ONLY` | `false` | Emit standalone model-only findings (off for precision) |
+| `CODESHIELD_REPAIR_PROVIDER` | `none` when unconfigured | `none` templates only · `llm` configured endpoint |
+| `CODESHIELD_RUN_TESTS` | `false` | Execute project tests during patch verification |
+| `CODESHIELD_RETAIN_CODE` | `false` | Persist full function bodies |
+| `CODESHIELD_DATA_DIR` / `CODESHIELD_DB` | `backend/data` | Storage location |
+| `CODESHIELD_API_TOKEN` | unset | Static CI bearer token |
 
-## Security model
+Optional ML dependencies:
 
-Ingested code is **never executed** by default. Patch verification is static
-(parse + re-scan); test execution is opt-in (`CODESHIELD_RUN_TESTS=1`) and runs in a
-throwaway temp directory. The scanner is decision support, not a certification —
-read the confidence, engine tag, and verification status on every finding.
+```bash
+pip install -r backend/requirements-ml.txt
+```
+
+Without local weights and with downloads disabled, the detector reports itself
+unavailable and rules continue to run.
+
+## Docker
+
+```bash
+docker build -f docker/Dockerfile -t codeshield:latest .
+docker run --rm -p 8000:8000 codeshield:latest
+# or
+docker compose -f docker/docker-compose.yml up --build
+```
+
+The image builds the frontend in a Node stage, runs the API as a non-root user,
+serves the dashboard from the same origin, and exposes a health check.
+
+## CI
+
+`.github/workflows/tests.yml` runs pytest, a clean self-scan, and the frontend
+build. `.github/workflows/codeshield.yml` demonstrates the reusable
+`.github/actions/codeshield-scan` action and uploads SARIF to code scanning.
 
 ## Attribution
 
@@ -113,5 +202,7 @@ The vulnerability knowledge base under `backend/codeshield/knowledge/` is derive
 from [usestrix/strix](https://github.com/usestrix/strix) (Apache-2.0,
 © 2025 OmniSecure Inc.); the full licence is preserved in
 [ATTRIBUTION_STRIX_APACHE2_LICENSE.txt](ATTRIBUTION_STRIX_APACHE2_LICENSE.txt).
-Detection uses `mrm8488/codebert-base-finetuned-detect-insecure-code`, built on
-`microsoft/codebert-base`.
+The optional detector builds on
+`mrm8488/codebert-base-finetuned-detect-insecure-code` and `microsoft/codebert-base`.
+See [docs/CodeShield_AI_PRD.md](docs/CodeShield_AI_PRD.md) for the product
+requirements and measured-model caveats.

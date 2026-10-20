@@ -7,13 +7,19 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # "off" for rules-only (fast, no downloads); "auto" uses CodeBERT if installed.
       CODESHIELD_MODEL_MODE: "off"
-      # Uncomment to require a bearer token on the API:
-      # CODESHIELD_API_TOKEN: "change-me"
+      CODESHIELD_AUTH: "on"
+      CODESHIELD_SECRET_KEY: "change-me-in-production"
       CODESHIELD_DATA_DIR: /data
+      # CODESHIELD_API_TOKEN: "change-me"
     volumes:
       - codeshield-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
 volumes:

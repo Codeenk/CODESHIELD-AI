@@ -1,32 +1,236 @@
 {
-  "sql_injection": {"cwe": "CWE-89", "cwe_title": "SQL Injection", "owasp": "A05:2025 Injection", "severity": "high"},
-  "nosql_injection": {"cwe": "CWE-943", "cwe_title": "Improper Neutralization of Special Elements in Data Query Logic", "owasp": "A05:2025 Injection", "severity": "high"},
-  "argument_injection": {"cwe": "CWE-88", "cwe_title": "Improper Neutralization of Argument Delimiters in a Command", "owasp": "A05:2025 Injection", "severity": "high"},
-  "ssti": {"cwe": "CWE-1336", "cwe_title": "Improper Neutralization of Special Elements Used in a Template Engine", "owasp": "A05:2025 Injection", "severity": "high"},
-  "rce": {"cwe": "CWE-94", "cwe_title": "Improper Control of Generation of Code (Code Injection)", "owasp": "A05:2025 Injection", "severity": "critical"},
-  "xxe": {"cwe": "CWE-611", "cwe_title": "Improper Restriction of XML External Entity Reference", "owasp": "A05:2025 Injection", "severity": "high"},
-  "insecure_deserialization": {"cwe": "CWE-502", "cwe_title": "Deserialization of Untrusted Data", "owasp": "A08:2025 Software or Data Integrity Failures", "severity": "high"},
-  "prototype_pollution": {"cwe": "CWE-1321", "cwe_title": "Improperly Controlled Modification of Object Prototype Attributes", "owasp": "A08:2025 Software or Data Integrity Failures", "severity": "high"},
-  "xss": {"cwe": "CWE-79", "cwe_title": "Improper Neutralization of Input During Web Page Generation (XSS)", "owasp": "A05:2025 Injection", "severity": "high"},
-  "csrf": {"cwe": "CWE-352", "cwe_title": "Cross-Site Request Forgery", "owasp": "A01:2025 Broken Access Control", "severity": "medium"},
-  "browser_security": {"cwe": "CWE-346", "cwe_title": "Origin Validation Error", "owasp": "A01:2025 Broken Access Control", "severity": "medium"},
-  "open_redirect": {"cwe": "CWE-601", "cwe_title": "URL Redirection to Untrusted Site (Open Redirect)", "owasp": "A01:2025 Broken Access Control", "severity": "medium"},
-  "header_injection": {"cwe": "CWE-113", "cwe_title": "Improper Neutralization of CRLF Sequences in HTTP Headers", "owasp": "A05:2025 Injection", "severity": "medium"},
-  "idor": {"cwe": "CWE-639", "cwe_title": "Authorization Bypass Through User-Controlled Key (IDOR)", "owasp": "A01:2025 Broken Access Control", "severity": "high"},
-  "broken_function_level_authorization": {"cwe": "CWE-285", "cwe_title": "Improper Authorization (BFLA)", "owasp": "A01:2025 Broken Access Control", "severity": "high"},
-  "mass_assignment": {"cwe": "CWE-915", "cwe_title": "Improperly Controlled Modification of Dynamically-Determined Object Attributes", "owasp": "A01:2025 Broken Access Control", "severity": "high"},
-  "authentication_jwt": {"cwe": "CWE-347", "cwe_title": "Improper Verification of Cryptographic Signature (JWT)", "owasp": "A07:2025 Authentication Failures", "severity": "high"},
-  "weak_password_detection": {"cwe": "CWE-521", "cwe_title": "Weak Password Requirements", "owasp": "A07:2025 Authentication Failures", "severity": "medium"},
-  "subdomain_takeover": {"cwe": "CWE-350", "cwe_title": "Reliance on Reverse DNS Resolution for a Security-Critical Action", "owasp": "A02:2025 Security Misconfiguration", "severity": "medium"},
-  "ssrf": {"cwe": "CWE-918", "cwe_title": "Server-Side Request Forgery (SSRF)", "owasp": "A01:2025 Broken Access Control", "severity": "high"},
-  "path_traversal_lfi_rfi": {"cwe": "CWE-22", "cwe_title": "Improper Limitation of a Pathname to a Restricted Directory (Path Traversal)", "owasp": "A01:2025 Broken Access Control", "severity": "high"},
-  "insecure_file_uploads": {"cwe": "CWE-434", "cwe_title": "Unrestricted Upload of File with Dangerous Type", "owasp": "A02:2025 Security Misconfiguration", "severity": "high"},
-  "http_request_smuggling": {"cwe": "CWE-444", "cwe_title": "Inconsistent Interpretation of HTTP Requests (Request Smuggling)", "owasp": "A02:2025 Security Misconfiguration", "severity": "high"},
-  "race_conditions": {"cwe": "CWE-362", "cwe_title": "Concurrent Execution Using Shared Resource with Improper Synchronization (Race Condition)", "owasp": "A06:2025 Insecure Design", "severity": "medium"},
-  "information_disclosure": {"cwe": "CWE-200", "cwe_title": "Exposure of Sensitive Information to an Unauthorized Actor", "owasp": "A02:2025 Security Misconfiguration", "severity": "medium"},
-  "business_logic": {"cwe": "CWE-840", "cwe_title": "Business Logic Errors", "owasp": "A06:2025 Insecure Design", "severity": "medium"},
-  "semantic_confusion": {"cwe": "CWE-436", "cwe_title": "Interpretation Conflict", "owasp": "A06:2025 Insecure Design", "severity": "medium"},
-  "agentic_system_security": {"cwe": "CWE-863", "cwe_title": "Incorrect Authorization (AI Agent Authority)", "owasp": "A01:2025 Broken Access Control", "severity": "high"},
-  "llm_prompt_injection": {"cwe": "CWE-1427", "cwe_title": "Improper Neutralization of Input Used for LLM Prompting", "owasp": "A05:2025 Injection", "severity": "high"},
-  "__default__": {"cwe": "CWE-693", "cwe_title": "Protection Mechanism Failure", "owasp": "A06:2025 Insecure Design", "severity": "medium"}
+  "sql_injection": {
+    "cwe": "CWE-89",
+    "cwe_title": "SQL Injection",
+    "owasp": "A05:2025 Injection",
+    "severity": "high"
+  },
+  "nosql_injection": {
+    "cwe": "CWE-943",
+    "cwe_title": "Improper Neutralization of Special Elements in Data Query Logic",
+    "owasp": "A05:2025 Injection",
+    "severity": "high"
+  },
+  "argument_injection": {
+    "cwe": "CWE-88",
+    "cwe_title": "Improper Neutralization of Argument Delimiters in a Command",
+    "owasp": "A05:2025 Injection",
+    "severity": "high"
+  },
+  "ssti": {
+    "cwe": "CWE-1336",
+    "cwe_title": "Improper Neutralization of Special Elements Used in a Template Engine",
+    "owasp": "A05:2025 Injection",
+    "severity": "high"
+  },
+  "rce": {
+    "cwe": "CWE-94",
+    "cwe_title": "Improper Control of Generation of Code (Code Injection)",
+    "owasp": "A05:2025 Injection",
+    "severity": "critical"
+  },
+  "xxe": {
+    "cwe": "CWE-611",
+    "cwe_title": "Improper Restriction of XML External Entity Reference",
+    "owasp": "A05:2025 Injection",
+    "severity": "high"
+  },
+  "insecure_deserialization": {
+    "cwe": "CWE-502",
+    "cwe_title": "Deserialization of Untrusted Data",
+    "owasp": "A08:2025 Software or Data Integrity Failures",
+    "severity": "high"
+  },
+  "prototype_pollution": {
+    "cwe": "CWE-1321",
+    "cwe_title": "Improperly Controlled Modification of Object Prototype Attributes",
+    "owasp": "A08:2025 Software or Data Integrity Failures",
+    "severity": "high"
+  },
+  "xss": {
+    "cwe": "CWE-79",
+    "cwe_title": "Improper Neutralization of Input During Web Page Generation (XSS)",
+    "owasp": "A05:2025 Injection",
+    "severity": "high"
+  },
+  "csrf": {
+    "cwe": "CWE-352",
+    "cwe_title": "Cross-Site Request Forgery",
+    "owasp": "A01:2025 Broken Access Control",
+    "severity": "medium"
+  },
+  "browser_security": {
+    "cwe": "CWE-346",
+    "cwe_title": "Origin Validation Error",
+    "owasp": "A01:2025 Broken Access Control",
+    "severity": "medium"
+  },
+  "open_redirect": {
+    "cwe": "CWE-601",
+    "cwe_title": "URL Redirection to Untrusted Site (Open Redirect)",
+    "owasp": "A01:2025 Broken Access Control",
+    "severity": "medium"
+  },
+  "header_injection": {
+    "cwe": "CWE-113",
+    "cwe_title": "Improper Neutralization of CRLF Sequences in HTTP Headers",
+    "owasp": "A05:2025 Injection",
+    "severity": "medium"
+  },
+  "idor": {
+    "cwe": "CWE-639",
+    "cwe_title": "Authorization Bypass Through User-Controlled Key (IDOR)",
+    "owasp": "A01:2025 Broken Access Control",
+    "severity": "high"
+  },
+  "broken_function_level_authorization": {
+    "cwe": "CWE-285",
+    "cwe_title": "Improper Authorization (BFLA)",
+    "owasp": "A01:2025 Broken Access Control",
+    "severity": "high"
+  },
+  "mass_assignment": {
+    "cwe": "CWE-915",
+    "cwe_title": "Improperly Controlled Modification of Dynamically-Determined Object Attributes",
+    "owasp": "A01:2025 Broken Access Control",
+    "severity": "high"
+  },
+  "authentication_jwt": {
+    "cwe": "CWE-347",
+    "cwe_title": "Improper Verification of Cryptographic Signature (JWT)",
+    "owasp": "A07:2025 Authentication Failures",
+    "severity": "high"
+  },
+  "weak_password_detection": {
+    "cwe": "CWE-521",
+    "cwe_title": "Weak Password Requirements",
+    "owasp": "A07:2025 Authentication Failures",
+    "severity": "medium"
+  },
+  "subdomain_takeover": {
+    "cwe": "CWE-350",
+    "cwe_title": "Reliance on Reverse DNS Resolution for a Security-Critical Action",
+    "owasp": "A02:2025 Security Misconfiguration",
+    "severity": "medium"
+  },
+  "ssrf": {
+    "cwe": "CWE-918",
+    "cwe_title": "Server-Side Request Forgery (SSRF)",
+    "owasp": "A01:2025 Broken Access Control",
+    "severity": "high"
+  },
+  "path_traversal_lfi_rfi": {
+    "cwe": "CWE-22",
+    "cwe_title": "Improper Limitation of a Pathname to a Restricted Directory (Path Traversal)",
+    "owasp": "A01:2025 Broken Access Control",
+    "severity": "high"
+  },
+  "insecure_file_uploads": {
+    "cwe": "CWE-434",
+    "cwe_title": "Unrestricted Upload of File with Dangerous Type",
+    "owasp": "A02:2025 Security Misconfiguration",
+    "severity": "high"
+  },
+  "http_request_smuggling": {
+    "cwe": "CWE-444",
+    "cwe_title": "Inconsistent Interpretation of HTTP Requests (Request Smuggling)",
+    "owasp": "A02:2025 Security Misconfiguration",
+    "severity": "high"
+  },
+  "race_conditions": {
+    "cwe": "CWE-362",
+    "cwe_title": "Concurrent Execution Using Shared Resource with Improper Synchronization (Race Condition)",
+    "owasp": "A06:2025 Insecure Design",
+    "severity": "medium"
+  },
+  "information_disclosure": {
+    "cwe": "CWE-200",
+    "cwe_title": "Exposure of Sensitive Information to an Unauthorized Actor",
+    "owasp": "A02:2025 Security Misconfiguration",
+    "severity": "medium"
+  },
+  "business_logic": {
+    "cwe": "CWE-840",
+    "cwe_title": "Business Logic Errors",
+    "owasp": "A06:2025 Insecure Design",
+    "severity": "medium"
+  },
+  "semantic_confusion": {
+    "cwe": "CWE-436",
+    "cwe_title": "Interpretation Conflict",
+    "owasp": "A06:2025 Insecure Design",
+    "severity": "medium"
+  },
+  "agentic_system_security": {
+    "cwe": "CWE-863",
+    "cwe_title": "Incorrect Authorization (AI Agent Authority)",
+    "owasp": "A01:2025 Broken Access Control",
+    "severity": "high"
+  },
+  "llm_prompt_injection": {
+    "cwe": "CWE-1427",
+    "cwe_title": "Improper Neutralization of Input Used for LLM Prompting",
+    "owasp": "A05:2025 Injection",
+    "severity": "high"
+  },
+  "command_injection": {
+    "cwe": "CWE-78",
+    "cwe_title": "Improper Neutralization of Special Elements used in an OS Command (OS Command Injection)",
+    "owasp": "A05:2025 Injection",
+    "severity": "critical"
+  },
+  "code_injection": {
+    "cwe": "CWE-95",
+    "cwe_title": "Improper Neutralization of Directives in Dynamically Evaluated Code (Eval Injection)",
+    "owasp": "A05:2025 Injection",
+    "severity": "critical"
+  },
+  "hardcoded_secrets": {
+    "cwe": "CWE-798",
+    "cwe_title": "Use of Hard-coded Credentials",
+    "owasp": "A07:2025 Authentication Failures",
+    "severity": "high"
+  },
+  "weak_cryptography": {
+    "cwe": "CWE-328",
+    "cwe_title": "Use of Weak Hash",
+    "owasp": "A04:2025 Cryptographic Failures",
+    "severity": "medium"
+  },
+  "insecure_randomness": {
+    "cwe": "CWE-338",
+    "cwe_title": "Use of Cryptographically Weak Pseudo-Random Number Generator (PRNG)",
+    "owasp": "A04:2025 Cryptographic Failures",
+    "severity": "medium"
+  },
+  "insecure_tls": {
+    "cwe": "CWE-295",
+    "cwe_title": "Improper Certificate Validation",
+    "owasp": "A02:2025 Security Misconfiguration",
+    "severity": "high"
+  },
+  "security_misconfiguration": {
+    "cwe": "CWE-16",
+    "cwe_title": "Configuration",
+    "owasp": "A02:2025 Security Misconfiguration",
+    "severity": "medium"
+  },
+  "ldap_injection": {
+    "cwe": "CWE-90",
+    "cwe_title": "Improper Neutralization of Special Elements used in an LDAP Query",
+    "owasp": "A05:2025 Injection",
+    "severity": "high"
+  },
+  "log_injection": {
+    "cwe": "CWE-117",
+    "cwe_title": "Improper Output Neutralization for Logs",
+    "owasp": "A09:2025 Logging & Alerting Failures",
+    "severity": "medium"
+  },
+  "__default__": {
+    "cwe": "CWE-693",
+    "cwe_title": "Protection Mechanism Failure",
+    "owasp": "A06:2025 Insecure Design",
+    "severity": "medium"
+  }
 }

@@ -1,29 +1,23 @@
-import { DiffEditor } from "@monaco-editor/react";
-
-function languageOf(name = "") {
-  if (name.endsWith(".py")) return "python";
-  if (name.endsWith(".java")) return "java";
-  if (name.endsWith(".js") || name.endsWith(".jsx")) return "javascript";
-  if (name.endsWith(".ts") || name.endsWith(".tsx")) return "typescript";
-  return "plaintext";
-}
-
-export default function DiffView({ original, modified, filename }) {
+export default function DiffView({ diff, maxHeight = 380 }) {
+  if (!diff) return <p className="muted">No diff available for this patch.</p>;
+  const lines = diff.split("\n");
   return (
-    <div className="diff">
-      <DiffEditor
-        original={original || ""}
-        modified={modified || ""}
-        language={languageOf(filename)}
-        theme="vs-dark"
-        options={{
-          readOnly: true,
-          renderSideBySide: true,
-          minimap: { enabled: false },
-          fontSize: 12,
-          scrollBeyondLastLine: false,
-        }}
-      />
+    <div className="diff" style={{ maxHeight }}>
+      <pre>
+        {lines.map((line, index) => {
+          let kind = "ctx";
+          if (line.startsWith("@@")) kind = "hunk";
+          else if (line.startsWith("+++") || line.startsWith("---")) kind = "file";
+          else if (line.startsWith("+")) kind = "add";
+          else if (line.startsWith("-")) kind = "del";
+          return (
+            <div key={index} className={`diff__line diff__line--${kind}`}>
+              <span className="diff__sign">{kind === "add" ? "+" : kind === "del" ? "-" : " "}</span>
+              <code>{line.replace(/^[+-](?![+-]{2})/, "") || " "}</code>
+            </div>
+          );
+        })}
+      </pre>
     </div>
   );
 }

@@ -1,0 +1,191 @@
+{
+  "sql_injection": {
+    "attack": "An attacker changes the query structure through the concatenated value, enabling authentication bypass, data exfiltration, or destructive statements.",
+    "remediation": [
+      "Use parameterized queries with bound values for every user-controlled operand.",
+      "Never concatenate, interpolate, or format user input into SQL text.",
+      "Constrain dynamic identifiers such as ORDER BY columns to a server-side allowlist."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/89.html", "https://owasp.org/Top10/"]
+  },
+  "nosql_injection": {
+    "attack": "A user-supplied object or expression alters the query semantics, allowing operators such as $ne or $where to bypass filters.",
+    "remediation": [
+      "Coerce and validate filter values to the expected scalar type before querying.",
+      "Reject object-valued parameters where a scalar is expected.",
+      "Apply least-privilege database roles and disable server-side JavaScript evaluation."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/943.html"]
+  },
+  "command_injection": {
+    "attack": "Shell metacharacters in the value break out of the intended command and execute attacker-controlled programs.",
+    "remediation": [
+      "Invoke subprocess with an argument list and shell=False.",
+      "If a shell is unavoidable, quote each argument with shlex.quote and validate against an allowlist.",
+      "Run the child process with the least privilege available."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/78.html"]
+  },
+  "code_injection": {
+    "attack": "The attacker supplies code that the interpreter evaluates inside the application process, leading to full execution.",
+    "remediation": [
+      "Replace eval/exec with a typed parser or a fixed dispatch table.",
+      "Use ast.literal_eval only for untrusted literal data, never for expressions.",
+      "Run untrusted code in an isolated worker with no secrets or network access."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/95.html"]
+  },
+  "ssti": {
+    "attack": "Template syntax supplied by the user is evaluated by the server, exposing application objects and often enabling remote code execution.",
+    "remediation": [
+      "Render fixed templates and pass user values as context variables.",
+      "Never build a template from a request value or evaluate template syntax at runtime.",
+      "Use a sandboxed template environment as defense in depth."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/1336.html"]
+  },
+  "xxe": {
+    "attack": "An XML document references external entities, causing file disclosure, internal network requests, or denial of service.",
+    "remediation": [
+      "Parse untrusted XML with defusedxml or disable DTD and external entity resolution.",
+      "Reject documents containing DOCTYPE declarations unless explicitly required.",
+      "Apply size and nesting limits to parsed documents."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/611.html"]
+  },
+  "insecure_deserialization": {
+    "attack": "Deserializing attacker-controlled bytes can instantiate arbitrary objects and execute gadget chains during object construction.",
+    "remediation": [
+      "Use JSON or another data-only format for untrusted input.",
+      "If native serialization is required, enforce a strict allowlist and integrity verification.",
+      "Never deserialize data from an untrusted source with pickle, yaml.load, or native object streams."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/502.html"]
+  },
+  "xss": {
+    "attack": "Attacker-controlled markup executes in another user's browser, stealing sessions or performing actions with their authority.",
+    "remediation": [
+      "Emit user values through context-aware escaping and use textContent instead of innerHTML.",
+      "Apply a strict Content Security Policy and avoid inline scripts.",
+      "Sanitize rich HTML with a maintained allowlist-based sanitizer when markup is required."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/79.html"]
+  },
+  "path_traversal_lfi_rfi": {
+    "attack": "The attacker supplies path segments such as ../ to escape the intended directory and read or overwrite arbitrary files.",
+    "remediation": [
+      "Resolve the final path and verify it remains inside a fixed base directory.",
+      "Use an opaque server-side identifier instead of a user-supplied filename.",
+      "Reject absolute paths, traversal segments, and null bytes before access."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/22.html"]
+  },
+  "ssrf": {
+    "attack": "The server makes a request to an attacker-chosen destination, reaching internal services or cloud metadata endpoints.",
+    "remediation": [
+      "Validate the destination scheme, host, and resolved address against a strict allowlist.",
+      "Block private, loopback, link-local, and metadata address ranges after DNS resolution.",
+      "Disable redirects or revalidate every redirect target."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/918.html"]
+  },
+  "open_redirect": {
+    "attack": "The application redirects to an attacker-controlled site, enabling phishing and token theft from a trusted domain.",
+    "remediation": [
+      "Redirect only to relative paths or an explicit server-side allowlist.",
+      "Never use a request parameter directly as a redirect destination.",
+      "Present an interstitial warning for external destinations."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/601.html"]
+  },
+  "hardcoded_secrets": {
+    "attack": "Anyone with source or artifact access can reuse the embedded credential against the real service.",
+    "remediation": [
+      "Remove the value from source and load it from a secret manager or environment at runtime.",
+      "Rotate the exposed credential immediately and review access logs.",
+      "Add a secret scanner to pre-commit and CI gates."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/798.html"]
+  },
+  "weak_cryptography": {
+    "attack": "Weak hashes permit fast offline cracking and collision attacks against security-sensitive values.",
+    "remediation": [
+      "Use SHA-256 or stronger for integrity and Argon2id, scrypt, or bcrypt for passwords.",
+      "Never use MD5 or SHA-1 for signatures, integrity, or credential storage.",
+      "Include a per-value salt and appropriate work factor."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/328.html"]
+  },
+  "insecure_randomness": {
+    "attack": "Predictable values allow attackers to guess tokens, reset codes, and session identifiers.",
+    "remediation": [
+      "Use the operating system CSPRNG through secrets or os.urandom.",
+      "Generate at least 128 bits of entropy for security tokens.",
+      "Never seed a general-purpose PRNG with time or another predictable value."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/338.html"]
+  },
+  "insecure_tls": {
+    "attack": "Disabling certificate validation allows a network attacker to impersonate the remote service and intercept credentials or data.",
+    "remediation": [
+      "Keep certificate and hostname verification enabled.",
+      "Pin a trusted CA bundle instead of disabling verification.",
+      "Treat certificate errors as failures and alert on them."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/295.html"]
+  },
+  "authentication_jwt": {
+    "attack": "Skipping signature verification or accepting the none algorithm lets an attacker forge arbitrary claims.",
+    "remediation": [
+      "Always verify the signature and restrict accepted algorithms to a server-side allowlist.",
+      "Validate issuer, audience, expiration, and not-before claims.",
+      "Use a maintained JWT library and never trust the token's own algorithm header."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/347.html"]
+  },
+  "prototype_pollution": {
+    "attack": "Attacker-controlled keys modify Object.prototype, changing application behavior or enabling denial of service.",
+    "remediation": [
+      "Reject __proto__, constructor, and prototype keys from untrusted objects.",
+      "Use a schema to copy only known fields into a fresh object.",
+      "Prefer Map or null-prototype objects for dynamic key storage."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/1321.html"]
+  },
+  "security_misconfiguration": {
+    "attack": "Development settings exposed in production reveal stack traces, enable interactive debuggers, or weaken transport and cookie protections.",
+    "remediation": [
+      "Drive environment-specific settings from configuration and default to secure values.",
+      "Disable debug mode and verbose errors in production.",
+      "Add configuration checks to deployment pipelines."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/16.html"]
+  },
+  "insecure_file_uploads": {
+    "attack": "An attacker uploads an executable or path-traversing filename, leading to code execution or arbitrary file writes.",
+    "remediation": [
+      "Generate a new server-side filename and store outside the web root.",
+      "Validate content type and extension against an allowlist.",
+      "Serve uploads with a non-executable content type and strict headers."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/434.html"]
+  },
+  "csrf": {
+    "attack": "A malicious site causes a logged-in browser to submit a state-changing request with the victim's cookies.",
+    "remediation": [
+      "Use synchronizer CSRF tokens on state-changing requests.",
+      "Set cookies with SameSite=Lax or Strict and use origin checks.",
+      "Require re-authentication for sensitive actions."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/352.html"]
+  },
+  "information_disclosure": {
+    "attack": "Sensitive implementation details or data are exposed to users who should not see them.",
+    "remediation": [
+      "Return generic error messages and log details server-side.",
+      "Remove secrets and internal identifiers from responses and artifacts.",
+      "Apply least privilege to logs, reports, and debug endpoints."
+    ],
+    "references": ["https://cwe.mitre.org/data/definitions/200.html"]
+  }
+}

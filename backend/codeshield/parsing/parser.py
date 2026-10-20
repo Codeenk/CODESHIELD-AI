@@ -1,277 +1,354 @@
-"""Extract function-level code units from source files.
-
-Python uses the standard-library ``ast`` module (exact). JavaScript, TypeScript,
-and Java use Tree-sitter when the ``tree-sitter-language-pack`` is installed,
-and fall back to a tolerant brace/regex walker otherwise. Detection always
-operates on :class:`CodeUnit` objects, so the parser backend is an
-implementation detail.
-"""
+"""Language-aware unit extraction for Python, JavaScript/TypeScript, and Java."""
 from __future__ import annotations
 
 import ast
 import re
+import textwrap
 from dataclasses import dataclass, field
 from typing import Optional
 
 from ..schemas import CodeUnit
 
-_TS_LANG = {
-    "javascript": "javascript",
-    "typescript": "typescript",
-    "java": "java",
-}
+try:
+    from tree_sitter_language_pack import get_parser as _get_parser
+except Exception:
+    _get_parser = None
 
-_JS_FUNCTION_TYPES = {
-    "function_declaration",
-    "function_expression",
-    "generator_function_declaration",
-    "method_definition",
-    "arrow_function",
+_FUNC_TYPES = {
+    "javascript": {
+        "function_declaration", "function", "function_expression", "generator_function",
+        "generator_function_declaration", "arrow_function", "method_definition",
+    },
+    "typescript": {
+        "function_declaration", "function", "function_expression", "generator_function",
+        "generator_function_declaration", "arrow_function", "method_definition",
+        "method_signature",
+    },
+    "tsx": {
+        "function_declaration", "function", "function_expression", "generator_function",
+        "generator_function_declaration", "arrow_function", "method_definition",
+    },
+    "java": {
+        "method_declaration", "constructor_declaration", "compact_constructor_declaration",
+    },
 }
-_JAVA_FUNCTION_TYPES = {"method_declaration", "constructor_declaration"}
+_JS_LANGS = {"javascript", "typescript", "tsx"}
 
 
 @dataclass
-class ParseResult:
+class ParsedFile:
+    path: str
+    language: str
     units: list[CodeUnit] = field(default_factory=list)
-    imports: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
+    error: Optional[str] = None
+    total_lines: int = 0
 
 
-# --------------------------------------------------------------------------- #
-# Python
-# --------------------------------------------------------------------------- #
-def _python_imports(tree: ast.AST) -> list[str]:
-    imports: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imports.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            imports.append(node.module or "")
-    return [name for name in imports if name]
+def detect_language(path: str) -> str:
+    suffix = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    return {
+        "py": "python", "js": "javascript", "jsx": "javascript", "mjs": "javascript",
+        "cjs": "javascript", "ts": "typescript", "tsx": "tsx", "java": "java",
+    }.get(suffix, "unknown")
 
 
-def parse_python(path: str, text: str) -> ParseResult:
-    result = ParseResult()
-    lines = text.splitlines()
-    try:
-        tree = ast.parse(text)
-    except SyntaxError as exc:
-        result.errors.append(f"{path}: syntax error at line {exc.lineno}: {exc.msg}")
-        return result
+def parse_file(path: str, content: str) -> ParsedFile:
+    language = detect_language(path)
+    lines = content.splitlines()
+    if language == "python":
+        return _parse_python(path, content, len(lines))
+    if language in _JS_LANGS or language == "java":
+        return _parse_treesitter(path, content, language, len(lines))
+    return ParsedFile(path=path, language=language, total_lines=len(lines), error="Unsupported language")
 
-    result.imports = _python_imports(tree)
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+
+def _slice(lines: list[str], start: int, end: int) -> str:
+    return textwrap.dedent("\n".join(lines[start - 1:end]))
+
+
+def _module_chunks(lines: list[str], ranges: list[tuple[int, int]], path: str, language: str) -> list[CodeUnit]:
+    covered = [False] * (len(lines) + 2)
+    for start, end in ranges:
+        for line in range(max(1, start), min(len(lines), end) + 1):
+            covered[line] = True
+    chunks: list[CodeUnit] = []
+    cursor = 1
+    while cursor <= len(lines):
+        if covered[cursor]:
+            cursor += 1
             continue
-        start = node.lineno
-        end = getattr(node, "end_lineno", node.lineno) or node.lineno
-        source = "\n".join(lines[start - 1 : end])
-        container = getattr(node, "parent_class", None)
-        result.units.append(
+        start = cursor
+        while cursor <= len(lines) and not covered[cursor]:
+            cursor += 1
+        end = cursor - 1
+        body = lines[start - 1:end]
+        meaningful = [line for line in body if line.strip() and not line.strip().startswith(("#", "//", "/*", "*"))]
+        if meaningful:
+            chunks.append(
+                CodeUnit(
+                    path=path, language=language, name="<module>", start_line=start,
+                    end_line=end, source=_slice(lines, start, end), kind="module",
+                )
+            )
+    return chunks
+
+
+def _parse_python(path: str, source: str, total_lines: int) -> ParsedFile:
+    lines = source.splitlines()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        unit = CodeUnit(
+            path=path, language="python", name="<file>", start_line=1,
+            end_line=max(1, total_lines), source=source, kind="file",
+        )
+        return ParsedFile(
+            path=path, language="python", units=[unit], total_lines=total_lines,
+            error=f"Python parse error at line {exc.lineno}: {exc.msg}",
+        )
+    units: list[CodeUnit] = []
+    ranges: list[tuple[int, int]] = []
+
+    def visit(node: ast.AST, container: Optional[str] = None) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                start = min([child.lineno] + [d.lineno for d in child.decorator_list])
+                end = getattr(child, "end_lineno", child.lineno)
+                name = f"{container}.{child.name}" if container else child.name
+                signature = _python_signature(child)
+                ranges.append((start, end))
+                units.append(
+                    CodeUnit(
+                        path=path, language="python", name=name, start_line=start,
+                        end_line=end, source=_slice(lines, start, end),
+                        container=container, signature=signature, kind="function",
+                    )
+                )
+                visit(child, name)
+            elif isinstance(child, ast.ClassDef):
+                name = f"{container}.{child.name}" if container else child.name
+                visit(child, name)
+            else:
+                visit(child, container)
+
+    visit(tree)
+    units.sort(key=lambda u: (u.start_line, u.end_line))
+    units.extend(_module_chunks(lines, ranges, path, "python"))
+    if not units:
+        units.append(
             CodeUnit(
-                path=path,
-                language="python",
-                name=node.name,
-                container=container,
-                start_line=start,
-                end_line=end,
-                source=source,
+                path=path, language="python", name="<module>", start_line=1,
+                end_line=max(1, total_lines), source=source, kind="file",
             )
         )
-    # Attach class containers by scanning class bodies.
-    containers = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            for child in node.body:
-                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    containers[(child.lineno, child.name)] = node.name
-    for unit in result.units:
-        key = (unit.start_line, unit.name)
-        if key in containers:
-            unit.container = containers[key]
-    result.units.sort(key=lambda u: (u.start_line, u.name))
-    return result
+    units.sort(key=lambda u: (u.start_line, u.end_line))
+    return ParsedFile(path=path, language="python", units=units, total_lines=total_lines)
 
 
-# --------------------------------------------------------------------------- #
-# Tree-sitter (JS/TS/Java)
-# --------------------------------------------------------------------------- #
-def _get_ts_parser(language: str):
+def _python_signature(node: ast.AST) -> str:
     try:
-        from tree_sitter_language_pack import get_parser  # type: ignore
-    except Exception:  # pragma: no cover - optional dependency
-        return None
-    try:
-        return get_parser(_TS_LANG[language])
-    except Exception:  # pragma: no cover
-        return None
+        args = ast.unparse(node.args) if hasattr(ast, "unparse") else ""
+    except Exception:
+        args = ""
+    prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+    return f"{prefix} {node.name}({args})"
 
 
-def _node_name(node, source: bytes) -> str:
-    name_node = node.child_by_field_name("name")
-    if name_node is not None:
-        return source[name_node.start_byte : name_node.end_byte].decode("utf-8", "replace")
+def _node_text(node, source_bytes: bytes) -> str:
+    return source_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+
+
+def _node_name(node, source_bytes: bytes) -> str:
+    for field_name in ("name", "property"):
+        child = node.child_by_field_name(field_name)
+        if child is not None:
+            return _node_text(child, source_bytes)
     parent = node.parent
-    if parent is not None:
-        parent_name = parent.child_by_field_name("name")
-        if parent_name is not None:
-            return source[parent_name.start_byte : parent_name.end_byte].decode("utf-8", "replace")
+    if parent is not None and parent.type == "variable_declarator":
+        name = parent.child_by_field_name("name")
+        if name is not None:
+            return _node_text(name, source_bytes)
+    if parent is not None and parent.type == "assignment":
+        left = parent.child_by_field_name("left")
+        if left is not None:
+            return _node_text(left, source_bytes)[:80]
+    if parent is not None and parent.type == "pair":
+        key = parent.child_by_field_name("key")
+        if key is not None:
+            return _node_text(key, source_bytes)[:80]
     return "<anonymous>"
 
 
-def _walk_functions(node, source: bytes, language: str, out: list) -> None:
-    kinds = _JAVA_FUNCTION_TYPES if language == "java" else _JS_FUNCTION_TYPES
-    if node.type in kinds:
-        start = node.start_point[0] + 1
-        end = node.end_point[0] + 1
-        text = source[node.start_byte : node.end_byte].decode("utf-8", "replace")
-        out.append(
-            CodeUnit(
-                path="",
-                language=language,
-                name=_node_name(node, source),
-                start_line=start,
-                end_line=end,
-                source=text,
-            )
+def _parse_treesitter(path: str, source: str, language: str, total_lines: int) -> ParsedFile:
+    if _get_parser is None:
+        return _fallback_regex(path, source, language, total_lines)
+    parser_name = "tsx" if language == "tsx" else language
+    try:
+        parser = _get_parser(parser_name)
+    except Exception:
+        return _fallback_regex(path, source, language, total_lines)
+    source_bytes = source.encode("utf-8")
+    try:
+        tree = parser.parse(source_bytes)
+    except Exception as exc:
+        return ParsedFile(
+            path=path, language=language, total_lines=total_lines,
+            error=f"Parser failure: {exc}",
         )
-        return  # do not descend into nested functions for the top-level unit
-    for child in node.children:
-        _walk_functions(child, source, language, out)
-
-
-def parse_tree_sitter(path: str, text: str, language: str) -> Optional[ParseResult]:
-    parser = _get_ts_parser(language)
-    if parser is None:
-        return None
-    source = text.encode("utf-8")
-    tree = parser.parse(source)
+    wanted = _FUNC_TYPES.get(language, set())
+    lines = source.splitlines()
     units: list[CodeUnit] = []
-    _walk_functions(tree.root_node, source, language, units)
-    for unit in units:
-        unit.path = path
-    units.sort(key=lambda u: (u.start_line, u.name))
+    ranges: list[tuple[int, int]] = []
+
+    def visit(node, container: Optional[str] = None) -> None:
+        if node.type in wanted:
+            name = _node_name(node, source_bytes)
+            if container and node.parent is not None and node.parent.type in {
+                "class_declaration", "class_body", "class_definition", "program",
+            }:
+                name = f"{container}.{name}" if node.parent.type != "program" else name
+            start = node.start_point[0] + 1
+            end = node.end_point[0] + 1
+            declarations = ("function_declaration", "method_definition", "method_declaration",
+                            "constructor_declaration", "generator_function_declaration")
+            if node.type == "arrow_function" and node.parent is not None:
+                parent_start = node.parent.start_point[0] + 1
+                if parent_start < start:
+                    start = parent_start
+            if node.type in declarations or node.type in {
+                "function_expression", "function", "arrow_function",
+            }:
+                ranges.append((start, end))
+            units.append(
+                CodeUnit(
+                    path=path, language=language, name=name, start_line=start, end_line=end,
+                    source=_slice(lines, start, end), container=container,
+                    signature=_signature_line(lines, start), kind="function",
+                )
+            )
+            visit_children(node, container, skip_self=True)
+        elif node.type in {"class_declaration", "class_definition", "class_body"}:
+            class_name = container
+            name_node = node.child_by_field_name("name")
+            if name_node is not None:
+                class_name = _node_text(name_node, source_bytes)
+            visit_children(node, class_name)
+        else:
+            visit_children(node, container)
+
+    def visit_children(node, container, skip_self=False):
+        for child in node.children:
+            visit(child, container)
+
+    visit(tree.root_node)
+    ranges.sort()
+    units.sort(key=lambda u: (u.start_line, u.end_line))
+    if language != "java":
+        units.extend(_module_chunks(lines, ranges, path, language))
     if not units:
-        # No function nodes (e.g. a script): fall back to a whole-file unit so
-        # detection still runs on top-level statements.
-        units = [_whole_file_unit(path, text, language)]
-    return ParseResult(units=units)
-
-
-# --------------------------------------------------------------------------- #
-# Regex fallback
-# --------------------------------------------------------------------------- #
-_JS_FUNC_RE = re.compile(
-    r"(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(|"
-    r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>|"
-    r"([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{",
-)
-_JAVA_METHOD_RE = re.compile(
-    r"(?:public|private|protected|static|final|synchronized|abstract|\s)+"
-    r"[\w<>\[\],.?]+\s+([A-Za-z_$][\w$]*)\s*\([^;{]*\)\s*(?:throws\s+[\w,.\s]+)?\{",
-)
-
-
-def _brace_block(lines: list[str], start: int) -> int:
-    """Return the 1-based end line of a brace-delimited block from ``start``."""
-    depth = 0
-    started = False
-    for i in range(start - 1, len(lines)):
-        for ch in lines[i]:
-            if ch == "{":
-                depth += 1
-                started = True
-            elif ch == "}":
-                depth -= 1
-        if started and depth <= 0:
-            return i + 1
-    return len(lines)
-
-
-def parse_regex(path: str, text: str, language: str) -> ParseResult:
-    lines = text.splitlines()
-    pattern = _JAVA_METHOD_RE if language == "java" else _JS_FUNC_RE
-    units: list[CodeUnit] = []
-    for i, line in enumerate(lines):
-        match = pattern.search(line)
-        if not match:
-            continue
-        name = next((g for g in match.groups() if g), "<anonymous>")
-        start = i + 1
-        end = _brace_block(lines, start)
         units.append(
             CodeUnit(
-                path=path,
-                language=language,
-                name=name,
-                start_line=start,
-                end_line=end,
-                source="\n".join(lines[start - 1 : end]),
+                path=path, language=language, name="<file>", start_line=1,
+                end_line=max(1, total_lines), source=source, kind="file",
             )
         )
+    units.sort(key=lambda u: (u.start_line, u.end_line))
+    return ParsedFile(path=path, language=language, units=units, total_lines=total_lines)
+
+
+def _signature_line(lines: list[str], start: int) -> str:
+    for line in lines[start - 1:start + 4]:
+        if "(" in line:
+            return line.strip()[:300]
+    return lines[start - 1].strip()[:300] if 1 <= start <= len(lines) else ""
+
+
+_JS_FUNCTION = re.compile(
+    r"^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\("
+)
+_JS_ARROW = re.compile(
+    r"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?"
+    r"(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
+)
+_JS_METHOD = re.compile(r"^\s*(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{")
+_RESERVED = {
+    "if", "for", "while", "switch", "catch", "function", "with", "return",
+    "else", "do", "try", "finally", "throw", "new", "typeof", "delete",
+    "void", "await", "yield", "constructor", "super", "this",
+}
+_JAVA_METHOD = re.compile(
+    r"^\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native|default)\s+)*"
+    r"[\w<>\[\],.?]+\s+([A-Za-z_$][\w$]*)\s*\([^;]*\)\s*(?:throws\s+[\w., ]+)?\{"
+)
+
+
+def _fallback_regex(path: str, source: str, language: str, total_lines: int) -> ParsedFile:
+    lines = source.splitlines()
+    units: list[CodeUnit] = []
+    ranges: list[tuple[int, int]] = []
+    patterns = [_JS_FUNCTION, _JS_ARROW, _JS_METHOD] if language in _JS_LANGS else [_JAVA_METHOD]
+    for index, line in enumerate(lines):
+        match = None
+        for pattern in patterns:
+            match = pattern.match(line)
+            if match:
+                break
+        if not match:
+            continue
+        start = index + 1
+        end = _brace_end(lines, index)
+        name = match.group(1)
+        if name in _RESERVED:
+            continue
+        ranges.append((start, end))
+        units.append(
+            CodeUnit(
+                path=path, language=language, name=name, start_line=start, end_line=end,
+                source=_slice(lines, start, end), signature=line.strip()[:300],
+            )
+        )
+    if language != "java":
+        units.extend(_module_chunks(lines, ranges, path, language))
     if not units:
-        units = [_whole_file_unit(path, text, language)]
-    return ParseResult(units=units)
+        units.append(
+            CodeUnit(
+                path=path, language=language, name="<file>", start_line=1,
+                end_line=max(1, total_lines), source=source, kind="file",
+            )
+        )
+    units.sort(key=lambda u: (u.start_line, u.end_line))
+    return ParsedFile(path=path, language=language, units=units, total_lines=total_lines)
 
 
-def _whole_file_unit(path: str, text: str, language: str) -> CodeUnit:
-    lines = text.splitlines()
-    return CodeUnit(
-        path=path,
-        language=language,
-        name="<module>",
-        start_line=1,
-        end_line=max(1, len(lines)),
-        source=text,
-    )
+def _brace_end(lines: list[str], start_index: int) -> int:
+    depth = 0
+    started = False
+    for index in range(start_index, min(len(lines), start_index + 1200)):
+        line = _strip_strings(lines[index])
+        for char in line:
+            if char == "{":
+                depth += 1
+                started = True
+            elif char == "}":
+                depth -= 1
+                if started and depth <= 0:
+                    return index + 1
+    return min(len(lines), start_index + 200)
 
 
-# --------------------------------------------------------------------------- #
-# Public API
-# --------------------------------------------------------------------------- #
-def parse_file(path: str, text: str, language: Optional[str] = None) -> ParseResult:
-    language = language or _guess_language(path)
-    if language == "python":
-        return parse_python(path, text)
-    ts_result = parse_tree_sitter(path, text, language)
-    if ts_result is not None:
-        return ts_result
-    return parse_regex(path, text, language)
+def _strip_strings(line: str) -> str:
+    return re.sub(r"(['\"]).*?\1", "", line)
 
 
-def _guess_language(path: str) -> str:
-    from ..ingestion.loader import detect_language
-
-    return detect_language(path) or "text"
-
-
-def approx_tokens(text: str) -> int:
-    """Cheap token estimate (~4 chars/token) for chunk sizing."""
-    return max(1, len(text) // 4)
-
-
-def chunk_source(source: str, max_tokens: int = 512, overlap_lines: int = 5):
-    """AST-aware-ish sliding window over lines for the model's token limit.
-
-    Yields ``(start_line_offset, text)`` where offset is 0-based within source.
-    """
-    lines = source.splitlines() or [""]
-    if approx_tokens(source) <= max_tokens:
-        yield 0, source
-        return
-    window: list[str] = []
-    window_tokens = 0
-    start = 0
-    for idx, line in enumerate(lines):
-        line_tokens = approx_tokens(line) + 1
-        if window and window_tokens + line_tokens > max_tokens:
-            yield start, "\n".join(window)
-            keep = window[-overlap_lines:] if overlap_lines else []
-            start = idx - len(keep)
-            window = list(keep)
-            window_tokens = sum(approx_tokens(l) + 1 for l in window)
-        window.append(line)
-        window_tokens += line_tokens
-    if window:
-        yield start, "\n".join(window)
+def chunk_source(source: str, max_lines: int = 120, overlap: int = 20) -> list[str]:
+    lines = source.splitlines()
+    if len(lines) <= max_lines:
+        return [source]
+    chunks = []
+    step = max(1, max_lines - overlap)
+    for start in range(0, len(lines), step):
+        end = min(len(lines), start + max_lines)
+        chunks.append("\n".join(lines[start:end]))
+        if end >= len(lines):
+            break
+    return chunks

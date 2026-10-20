@@ -1,133 +1,190 @@
-"""Verify a candidate patch.
-
-By default verification is *static and safe*: does the patch parse, does it stop
-the original rule from firing, and is the function signature preserved.
-Executing the project's own tests is opt-in (``CODESHIELD_RUN_TESTS=1``) and only
-ever runs inside a throwaway temp directory.
-"""
+"""Static and dynamic verification for repair candidates."""
 from __future__ import annotations
 
+import ast
 import re
-import subprocess
-import tempfile
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
 
 from .. import config
-from ..detection.rules import RuleEngine
-from ..schemas import CodeUnit, Finding
+from ..detection.rules import RuleHit, detect_unit, rule_meta
+from ..schemas import CodeUnit, Finding, PatchCandidate
+from ..repair.templates import TemplateFix, unified_diff
+from .runner import TestRunner
 
 
-@dataclass
-class VerificationReport:
-    status: str  # verified | partially_verified | unverified
-    checks: list[dict] = field(default_factory=list)
+def _patched_unit(unit: CodeUnit, source: str) -> CodeUnit:
+    return CodeUnit(
+        path=unit.path, language=unit.language, name=unit.name,
+        start_line=unit.start_line,
+        end_line=unit.start_line + max(0, len(source.splitlines()) - 1),
+        source=source, container=unit.container, signature=unit.signature, kind=unit.kind,
+    )
 
-    def as_dicts(self) -> list[dict]:
-        return self.checks
+
+def _python_signature(source: str) -> Optional[str]:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+            return f"{prefix} {node.name}({ast.unparse(node.args)})"
+    return None
 
 
-def _parses(source: str, language: str) -> tuple[bool, str]:
+def _generic_signature(source: str, language: str) -> Optional[str]:
+    patterns = [
+        re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(([^)]*)\)", re.M),
+        re.compile(r"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>", re.M),
+        re.compile(r"^\s*(?:[A-Za-z_$][\w$]*\s*\(([^)]*)\)\s*\{)", re.M),
+        re.compile(r"^\s*(?:public|private|protected|static|final|synchronized|\s)+[\w<>\[\],.?]+\s+([A-Za-z_$][\w$]*)\s*\(([^;{]*)\)", re.M),
+    ]
+    for pattern in patterns:
+        match = pattern.search(source)
+        if not match:
+            continue
+        groups = [group for group in match.groups() if group is not None]
+        params = groups[-1] if groups else ""
+        names = re.findall(r"[A-Za-z_$][\w$]*", params)
+        return "|".join(sorted(names))
+    return None
+
+
+def _same_signature(original: CodeUnit, patched: str) -> bool:
+    if original.kind in {"module", "file"} or original.name == "<module>":
+        return True
+    if original.language == "python":
+        before = _python_signature(original.source)
+        after = _python_signature(patched)
+        return bool(before and after and before == after)
+    before = _generic_signature(original.source, original.language)
+    after = _generic_signature(patched, original.language)
+    return bool(before and after and before == after)
+
+
+def _checks(
+    finding: Finding, unit: CodeUnit, patched: str, hits: list[RuleHit],
+    original_slugs: set[str], tests: Optional[dict],
+) -> list[dict]:
+    checks = [
+        {
+            "name": "Parses cleanly",
+            "passed": _parses(patched, unit.language),
+            "detail": "Patched unit parses in the target language.",
+        }
+    ]
+    persists = [hit for hit in hits if hit.slug == (finding.knowledge_ref or "") or hit.meta["cwe"] == finding.cwe]
+    checks.append(
+        {
+            "name": "Original weakness removed",
+            "passed": not persists,
+            "detail": "No rule still reports the original CWE in the patched unit."
+            if not persists else f"Still detected: {', '.join(sorted({h.slug for h in persists}))}",
+        }
+    )
+    new_high = [
+        hit for hit in hits
+        if hit.slug not in original_slugs and rule_meta(hit.slug).get("severity") in {"critical", "high"}
+    ]
+    checks.append(
+        {
+            "name": "No new high or critical findings",
+            "passed": not new_high,
+            "detail": "No new high/critical rule fired." if not new_high
+            else f"New risk: {', '.join(sorted({h.slug for h in new_high}))}",
+        }
+    )
+    checks.append(
+        {
+            "name": "Public signature preserved",
+            "passed": _same_signature(unit, patched),
+            "detail": "Function name and parameters are unchanged.",
+        }
+    )
+    if tests is None:
+        checks.append({"name": "Existing tests", "passed": None, "detail": "No test project is available."})
+    else:
+        checks.append(tests)
+    return checks
+
+
+def _parses(source: str, language: str) -> bool:
     if language == "python":
-        import ast
-
         try:
             ast.parse(source)
-            return True, "Python AST parsed"
-        except SyntaxError as exc:
-            return False, f"SyntaxError: {exc.msg} (line {exc.lineno})"
-    # JS/TS/Java: try tree-sitter, else a brace-balance sanity check.
-    try:
-        from ..parsing.parser import _get_ts_parser  # type: ignore
-
-        parser = _get_ts_parser(language)
-        if parser is not None:
-            tree = parser.parse(source.encode("utf-8"))
-            if tree.root_node.has_error:
-                return False, "Tree-sitter reported a parse error"
-            return True, "Tree-sitter parsed"
-    except Exception:  # noqa: BLE001
-        pass
-    depth = 0
-    for ch in source:
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth < 0:
-                return False, "Unbalanced braces"
-    return (depth == 0), f"Brace balance depth={depth}"
-
-
-class Verifier:
-    def __init__(self, rules: Optional[RuleEngine] = None) -> None:
-        self.rules = rules or RuleEngine()
-
-    def verify(self, unit: CodeUnit, patched_source: str, finding: Finding) -> VerificationReport:
-        checks: list[dict] = []
-
-        ok, detail = _parses(patched_source, unit.language)
-        checks.append({"name": "parses", "ok": ok, "detail": detail})
-        if not ok:
-            return VerificationReport("unverified", checks)
-
-        patched_unit = unit.model_copy(update={"source": patched_source})
-        detections = self.rules.scan(patched_unit)
-        still_fires = False
-        if finding.knowledge_ref:
-            still_fires = any(d.slug == finding.knowledge_ref for d in detections)
-        else:
-            still_fires = any(d.cwe == finding.cwe for d in detections)
-        checks.append(
-            {
-                "name": "no_rescan_regression",
-                "ok": not still_fires,
-                "detail": "original rule no longer fires" if not still_fires
-                else "the original rule still fires on the patched code",
-            }
-        )
-
-        sig_ok = self._signature_preserved(unit, patched_source)
-        checks.append(
-            {"name": "signature_preserved", "ok": sig_ok,
-             "detail": "function/method name preserved" if sig_ok else "signature changed"}
-        )
-
-        checks.append(self._tests_check(patched_source, unit.language))
-
-        if ok and not still_fires and sig_ok:
-            status = "verified"
-        elif ok:
-            status = "partially_verified"
-        else:
-            status = "unverified"
-        return VerificationReport(status, checks)
-
-    @staticmethod
-    def _signature_preserved(unit: CodeUnit, patched: str) -> bool:
-        name = unit.name
-        if not name or name in {"<module>", "<anonymous>"}:
             return True
-        return bool(re.search(rf"\b{re.escape(name)}\b", patched))
+        except SyntaxError:
+            return False
+    return bool(source.strip()) and source.count("{") <= source.count("}") + 1
 
-    def _tests_check(self, patched_source: str, language: str) -> dict:
-        if not config.RUN_TESTS:
-            return {"name": "tests", "ok": None, "detail": "test execution disabled (safe default)"}
-        if language != "python":
-            return {"name": "tests", "ok": None, "detail": "only Python tests are executed"}
-        try:
-            with tempfile.TemporaryDirectory(prefix="codeshield-test-") as tmp:
-                target = Path(tmp) / "patched_snippet.py"
-                target.write_text(patched_source, encoding="utf-8")
-                proc = subprocess.run(
-                    ["python", "-m", "pytest", "-q", str(target)],
-                    capture_output=True, text=True, timeout=config.TEST_TIMEOUT_SECONDS,
-                )
-                return {
-                    "name": "tests",
-                    "ok": proc.returncode == 0,
-                    "detail": (proc.stdout or proc.stderr).strip()[-400:],
-                }
-        except Exception as exc:  # noqa: BLE001
-            return {"name": "tests", "ok": None, "detail": f"tests not run: {exc}"}
+
+def verify_candidate(
+    finding: Finding, unit: CodeUnit, fix: TemplateFix,
+    original_hits: Optional[list[RuleHit]] = None,
+    runner: Optional[TestRunner] = None,
+) -> PatchCandidate:
+    patched_unit = _patched_unit(unit, fix.source)
+    hits = detect_unit(patched_unit)
+    original_slugs = {hit.slug for hit in (original_hits or [])}
+    original_slugs.add(finding.knowledge_ref or "")
+
+    tests: Optional[dict] = None
+    tests_inconclusive = False
+    if runner is not None and runner.has_tests:
+        if not runner.enabled:
+            tests = {
+                "name": "Existing tests", "passed": None,
+                "detail": "Tests exist but execution is disabled (CODESHIELD_RUN_TESTS=false).",
+            }
+            tests_inconclusive = True
+        else:
+            outcome = runner.run(unit.path, fix.source)
+            tests = {
+                "name": "Existing tests", "passed": outcome.status == "passed",
+                "detail": f"{outcome.status}: {outcome.detail}"[:1200],
+            }
+            if outcome.status != "passed":
+                tests["passed"] = False if outcome.status == "failed" else None
+                tests_inconclusive = outcome.status != "failed"
+    elif runner is not None:
+        tests = {"name": "Existing tests", "passed": None, "detail": "No tests found in the project."}
+
+    checks = _checks(finding, unit, fix.source, hits, original_slugs, tests)
+    parse_ok = checks[0]["passed"]
+    persists = not checks[1]["passed"]
+    new_high = not checks[2]["passed"]
+    signature_ok = checks[3]["passed"]
+    test_failed = bool(tests and tests["passed"] is False)
+
+    if not parse_ok or persists or new_high or not signature_ok or test_failed:
+        status = "unverified"
+    elif fix.semantic_risk or tests_inconclusive:
+        status = "partially_verified"
+    else:
+        status = "verified"
+
+    return PatchCandidate(
+        source=fix.source,
+        summary=fix.summary,
+        unified_diff=unified_diff(unit.source, fix.source, unit.path),
+        verification=status,
+        checks=checks,
+        rationale=fix.rationale,
+        semantic_risk=fix.semantic_risk,
+        generator=fix.generator,
+        language=unit.language,
+    )
+
+
+def rank(candidates: list[PatchCandidate]) -> list[PatchCandidate]:
+    order = {"verified": 0, "partially_verified": 1, "unverified": 2}
+    candidates.sort(
+        key=lambda c: (
+            order.get(c.verification, 3), c.semantic_risk,
+            0 if c.generator == "template" else 1,
+        )
+    )
+    for index, candidate in enumerate(candidates, start=1):
+        candidate.rank = index
+    return candidates

@@ -1,60 +1,44 @@
-"""Generate, verify, and rank candidate patches for a finding."""
+"""Generate, verify, and rank repair candidates."""
 from __future__ import annotations
 
-import logging
 from typing import Optional
 
 from .. import config
+from ..detection.rules import RuleHit
+from ..sandbox.runner import TestRunner
+from ..sandbox.verifier import rank, verify_candidate
 from ..schemas import CodeUnit, Finding, PatchCandidate
-from ..sandbox.verifier import Verifier
-from .templates import advisory_patch, apply_templates, unified_diff
-
-log = logging.getLogger("codeshield.repair")
-
-_RANK = {"verified": 2, "partially_verified": 1, "unverified": 0}
+from . import llm
+from .templates import TemplateFix, templates_for
 
 
-class PatchGenerator:
-    def __init__(self, verifier: Optional[Verifier] = None) -> None:
-        self.verifier = verifier or Verifier()
+def build_patches(
+    finding: Finding, unit: Optional[CodeUnit],
+    original_hits: Optional[list[RuleHit]] = None,
+    runner: Optional[TestRunner] = None,
+    allow_llm: bool = True,
+) -> list[PatchCandidate]:
+    if unit is None:
+        return []
+    fixes: list[TemplateFix] = list(templates_for(finding, unit))
+    if allow_llm and llm.available() and len(fixes) < config.REPAIR_MAX_CANDIDATES:
+        remaining = max(1, config.REPAIR_MAX_CANDIDATES - len(fixes))
+        fixes.extend(llm.generate(finding, unit, remaining))
+    unique: dict[str, TemplateFix] = {}
+    for fix in fixes:
+        unique.setdefault(fix.source, fix)
+    candidates = [
+        verify_candidate(finding, unit, fix, original_hits, runner)
+        for fix in unique.values()
+    ]
+    candidates = [candidate for candidate in candidates if candidate.source.strip()]
+    return rank(candidates)[: config.REPAIR_MAX_CANDIDATES]
 
-    def generate(self, finding: Finding, unit: CodeUnit) -> list[PatchCandidate]:
-        produced = apply_templates(unit, finding)
-        if not produced:
-            produced = [advisory_patch(unit, finding)]
 
-        candidates: list[PatchCandidate] = []
-        seen: set[str] = set()
-        for item in produced:
-            source = item["source"]
-            if source in seen:
-                continue
-            seen.add(source)
-            report = self.verifier.verify(unit, source, finding)
-            status = report.status
-            # A behaviour-changing rewrite is never fully "verified" purely by
-            # static checks: downgrade it one notch for honesty.
-            if item.get("semantic_risk") and status == "verified":
-                status = "partially_verified"
-            candidates.append(
-                PatchCandidate(
-                    rank=0,
-                    source=source,
-                    summary=item.get("summary", "patch"),
-                    unified_diff=unified_diff(unit.source, source, unit.path),
-                    verification=status,  # type: ignore[arg-type]
-                    checks=report.as_dicts(),
-                    rationale=item.get("rationale", ""),
-                    semantic_risk=bool(item.get("semantic_risk")),
-                )
-            )
+def apply_retention(candidate: PatchCandidate) -> None:
+    if not config.RETAIN_CODE:
+        candidate.source = ""
+    if config.MASK_SECRETS:
+        from ..privacy import mask_text
 
-        candidates.sort(
-            key=lambda c: (
-                -_RANK[c.verification],
-                len(c.unified_diff),  # prefer the smallest diff
-            )
-        )
-        for i, cand in enumerate(candidates, start=1):
-            cand.rank = i
-        return candidates[: config.REPAIR_MAX_CANDIDATES]
+        candidate.unified_diff = mask_text(candidate.unified_diff)
