@@ -36,7 +36,14 @@ class Workspace:
         return self.root if self.source_type == "repo" else None
 
     def cleanup(self) -> None:
-        shutil.rmtree(self.root, ignore_errors=True)
+        def _handle_readonly(func, path, exc_info):
+            import stat
+            try:
+                os.chmod(path, stat.S_IWRITE)
+                func(path)
+            except Exception:
+                pass
+        shutil.rmtree(self.root, onerror=_handle_readonly, ignore_errors=True)
 
     def __enter__(self) -> "Workspace":
         return self
@@ -52,12 +59,13 @@ def language_for(path: str) -> Optional[str]:
 
 def _safe_relative(name: str) -> str:
     normalized = name.replace("\\", "/").lstrip("/")
+    normalized = re.sub(r"^[a-zA-Z]:[/]+", "", normalized)
     parts = [p for p in normalized.split("/") if p not in {"", "."}]
     if not parts or any(p == ".." for p in parts):
-        raise IngestionError("Archive contains an unsafe path")
+        raise IngestionError("Path contains an unsafe component")
     joined = "/".join(parts)
     if len(joined) > 300:
-        raise IngestionError("Archive contains an excessively long path")
+        raise IngestionError("Path is excessively long")
     return joined
 
 
@@ -169,13 +177,43 @@ def workspace_from_uploads(uploads: Iterable[tuple[str, bytes]]) -> Workspace:
     try:
         for index, (name, payload) in enumerate(uploads):
             relative = _safe_relative(name or f"file_{index}.txt")
-            if len(payload) > config.MAX_FILE_BYTES:
+            is_zip = relative.lower().endswith(".zip") or payload.startswith(b"PK\x03\x04")
+            if len(payload) > config.MAX_FILE_BYTES and not is_zip:
                 raise IngestionError(f"{relative} exceeds the per-file size limit")
             total += len(payload)
             if total > config.MAX_TOTAL_BYTES:
                 raise IngestionError("Upload exceeds the configured total size limit")
             if len(files) >= config.MAX_FILES:
                 raise IngestionError("Too many files in upload")
+
+            if is_zip:
+                try:
+                    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                        members = list(_iter_zip_members(archive))
+                        mapping = _strip_common_prefix([rel for _, rel in members])
+                        for info, member_rel in members:
+                            path = mapping[member_rel]
+                            if not language_for(path):
+                                continue
+                            if info.file_size > config.MAX_FILE_BYTES:
+                                continue
+                            if len(files) >= config.MAX_FILES:
+                                raise IngestionError("Too many files in upload")
+                            with archive.open(info) as handle:
+                                member_data = handle.read(config.MAX_FILE_BYTES + 1)
+                            if len(member_data) > config.MAX_FILE_BYTES:
+                                continue
+                            text = _decode(member_data)
+                            if text is None:
+                                continue
+                            dest = root / path
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            dest.write_text(text, encoding="utf-8")
+                            files[path] = text
+                    continue
+                except (zipfile.BadZipFile, IngestionError):
+                    pass
+
             if not language_for(relative):
                 continue
             text = _decode(payload)
@@ -227,6 +265,8 @@ def validate_repo_url(url: str) -> str:
         raise IngestionError("Repository URL is required")
     if any(token in url for token in ("ext::", "::", "\n", "\r", "\x00")):
         raise IngestionError("Repository URL contains an unsupported protocol")
+    if not re.match(r"^[a-zA-Z]+://", url):
+        url = "https://" + url
     parsed = urlparse(url)
     if parsed.scheme not in config.ALLOWED_REPO_SCHEMES:
         raise IngestionError(
@@ -235,6 +275,8 @@ def validate_repo_url(url: str) -> str:
     if parsed.username or parsed.password:
         raise IngestionError("Credentials in repository URLs are not allowed")
     host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
     if host not in config.ALLOWED_REPO_HOSTS:
         raise IngestionError(
             f"Repository host must be one of: {', '.join(sorted(config.ALLOWED_REPO_HOSTS))}"
@@ -246,15 +288,19 @@ def validate_repo_url(url: str) -> str:
 
 
 def _repo_env() -> dict[str, str]:
-    env = {
+    env = dict(os.environ)
+    env.update({
         "GIT_TERMINAL_PROMPT": "0",
-        "GIT_ASKPASS": "/bin/true",
         "GIT_ALLOW_PROTOCOL": "https",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GCM_INTERACTIVE": "never",
         "LC_ALL": "C",
-    }
+    })
+    if os.name != "nt":
+        env["GIT_ASKPASS"] = "/bin/true"
+    else:
+        env.pop("GIT_ASKPASS", None)
     return env
 
 
@@ -262,6 +308,23 @@ def clone_repo(
     url: str, branch: Optional[str] = None, commit: Optional[str] = None
 ) -> Workspace:
     url = validate_repo_url(url)
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = parsed.path.strip("/")
+
+    m = re.match(r"^([^/]+/[^/]+)/(?:tree|blob)/(.+)$", path)
+    if m:
+        path = m.group(1)
+        if not branch:
+            branch = m.group(2).split("/")[0]
+
+    parts = path.split("/")
+    if len(parts) >= 2:
+        path = f"{parts[0]}/{parts[1]}"
+    clean_clone_url = f"{parsed.scheme}://{host}/{path}"
+
     if branch and not _BRANCH_RE.match(branch):
         raise IngestionError("Invalid branch name")
     if branch and ".." in branch:
@@ -277,7 +340,7 @@ def clone_repo(
     ]
     if branch:
         command += ["--branch", branch]
-    command += ["--", url, str(target)]
+    command += ["--", clean_clone_url, str(target)]
     try:
         result = subprocess.run(
             command, capture_output=True, text=True, timeout=config.REPO_TIMEOUT,
@@ -317,8 +380,9 @@ def clone_repo(
 
 
 def _clean_git_error(message: str) -> str:
-    text = (message or "").strip().splitlines()
-    last = text[-1] if text else "Repository could not be cloned"
+    lines = [line.strip() for line in (message or "").splitlines() if line.strip()]
+    errors = [l for l in lines if l.startswith(("fatal:", "error:"))]
+    last = errors[-1] if errors else (lines[-1] if lines else "Repository could not be cloned")
     last = re.sub(r"https://[^@\s]+@", "https://", last)
     return last[:300]
 
