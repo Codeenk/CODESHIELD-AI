@@ -16,6 +16,19 @@ TypeScript, and Java. It ingests real source code, identifies review candidates 
 deterministic rules and scoped taint analysis, explains the path behind each result,
 proposes patches, and re-parses and re-scans every candidate before ranking it.
 
+It is an AI-powered source code security system designed to detect software
+vulnerabilities, explain their causes, and recommend potential fixes. Traditional security tools
+may generate false positives and provide limited explanations, increasing the manual effort
+required for code review. Inspired by research such as CodeBERT, Devign, and LineVul[6], the
+proposed system combines Python AST and Tree-sitter parsing with deterministic security rules
+and optional CodeBERT analysis to identify potential vulnerabilities. Qwen2.5-Coder or
+predefined templates are used to generate candidate fixes, which are then verified through rescanning. A web-based dashboard developed using React, FastAPI, and SQLite displays
+vulnerability details, code highlights, suggested fixes, and security reports. Project validation
+reports 13 findings across three vulnerable sample files, zero findings in a clean sample, and 56
+automated tests. One model-assisted test reported 97% confidence; however, these preliminary
+results do not establish overall detection accuracy. CodeShield AI aims to simplify vulnerability
+analysis, improve explainability, and support developers in resolving security issues efficiently.
+
 Rules-only scanning works without a model, GPU, or network. CodeBERT detection and
 local LLM repair are optional layers. When those components are absent or fail,
 scanning continues and the API reports what was and was not used.
